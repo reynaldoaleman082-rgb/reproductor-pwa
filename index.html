@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Reproductor Offline</title>
+  <meta name="description" content="Tu música, guardada en tu teléfono y reproducible sin internet.">
+  <meta name="theme-color" content="#0b1020">
+
+  <!-- iOS: hace que se abra a pantalla completa cuando se añade al inicio -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Reproductor">
+  <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
+  <link rel="icon" href="./icons/icon-192.png" type="image/png">
+
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <div class="app">
+    <header class="cabecera">
+      <div class="cabecera__titulo">
+        <span class="cabecera__icono" aria-hidden="true">♪</span>
+        <div>
+          <h1>Mi música</h1>
+          <p id="estado-almacenamiento" class="cabecera__estado">Calculando espacio…</p>
+        </div>
+      </div>
+      <button id="boton-importar" class="boton boton--primario" type="button">
+        <span aria-hidden="true">＋</span> Importar
+      </button>
+    </header>
+
+    <main class="contenido">
+      <section id="vacio" class="vacio" hidden>
+        <div class="vacio__icono" aria-hidden="true">♫</div>
+        <h2>Aún no hay canciones</h2>
+        <p>Importa archivos desde <strong>Archivos</strong>. Se copian a este teléfono y funcionan sin internet.</p>
+        <button id="boton-importar-vacio" class="boton boton--primario" type="button">Elegir canciones</button>
+        <p class="vacio__aviso">En iOS, pulsa <strong>Compartir → Añadir a la pantalla de inicio</strong> para usarla como una app.</p>
+      </section>
+
+      <ul id="lista-canciones" class="lista" aria-label="Biblioteca de música"></ul>
+    </main>
+
+    <footer id="reproductor" class="reproductor" hidden>
+      <button id="abrir-pantalla" class="reproductor__info" type="button" aria-label="Abrir reproductor">
+        <img id="mini-caratula" class="reproductor__caratula" alt="" hidden>
+        <span id="mini-caratula-vacia" class="reproductor__caratula-vacia" aria-hidden="true">♪</span>
+        <span class="reproductor__textos">
+          <strong id="mini-titulo"></strong>
+          <small id="mini-artista"></small>
+        </span>
+      </button>
+      <div class="reproductor__controles">
+        <button id="boton-anterior" class="boton-icono" type="button" aria-label="Canción anterior">⏮</button>
+        <button id="boton-play" class="boton-icono boton-icono--principal" type="button" aria-label="Reproducir o pausar">▶</button>
+        <button id="boton-siguiente" class="boton-icono" type="button" aria-label="Canción siguiente">⏭</button>
+      </div>
+    </footer>
+  </div>
+
+  <div id="pantalla-completa" class="overlay" hidden>
+    <div class="overlay__contenido">
+      <div class="overlay__barra">
+        <button id="cerrar-pantalla" class="boton-icono" type="button" aria-label="Cerrar reproductor">▼</button>
+        <span>Reproduciendo</span>
+        <span class="overlay__espacio"></span>
+      </div>
+      <img id="gran-caratula" class="gran-caratula" alt="" hidden>
+      <div id="gran-caratula-vacia" class="gran-caratula-vacia" aria-hidden="true">♪</div>
+      <div class="overlay__textos">
+        <strong id="gran-titulo"></strong>
+        <span id="gran-artista"></span>
+        <small id="gran-album"></small>
+      </div>
+      <div class="barra-progreso">
+        <input id="progreso" type="range" min="0" max="100" value="0" step="0.1" aria-label="Posición de la canción">
+        <div class="barra-progreso__tiempos">
+          <span id="tiempo-actual">0:00</span>
+          <span id="tiempo-total">0:00</span>
+        </div>
+      </div>
+      <div class="overlay__controles">
+        <button id="gran-anterior" class="boton-icono" type="button" aria-label="Anterior">⏮</button>
+        <button id="gran-play" class="boton-icono boton-icono--principal boton-icono--grande" type="button" aria-label="Reproducir o pausar">▶</button>
+        <button id="gran-siguiente" class="boton-icono" type="button" aria-label="Siguiente">⏭</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="aviso" class="aviso" role="status" aria-live="polite" hidden></div>
+
+  <input id="entrada-archivos" type="file" accept="audio/*,.mp3,.m4a,.aac,.wav,.ogg,.flac,.aiff,.aif" multiple hidden>
+  <audio id="audio" preload="metadata"></audio>
+
+  <script src="./app.js" type="module"></script>
+</body>
+</html>
