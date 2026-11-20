@@ -812,7 +812,8 @@ function programarFinCancion() {
   const restante = Math.max(0, audio.duration - audio.currentTime);
   temporizadorFinCancion = setTimeout(() => {
     if (idActual !== idProgramado) return;
-    if (audio.paused && !audio.ended) return;
+    // iOS a veces pone paused sin ended al terminar. Basta con comprobar que
+    // el tiempo llegó al final; si se pausó a mitad, este guarda impide avanzar.
     if (!audio.ended && audio.currentTime < audio.duration - 0.5) return;
     avanzarAlSiguiente();
   }, (restante + 1.5) * 1000);
@@ -838,7 +839,11 @@ function reproducir(cancion, { reanudar = false } = {}) {
   const idReproducido = cancion.id;
   const guardada = reanudar ? Number(posicionesGuardadas[cancion.id]) || 0 : 0;
   posicionPendiente = guardada > 1 ? guardada : null;
-  audio.currentTime = 0;
+  try {
+    audio.currentTime = 0;
+  } catch (_) {
+    // Safari puede rechazarlo si el blob aún no tiene metadata; loadedmetadata lo ajusta.
+  }
   actualizarMiniProgreso();
   actualizarPistaActual();
   dibujarReproductor();
@@ -1500,7 +1505,9 @@ audio.addEventListener('play', () => {
 });
 
 audio.addEventListener('pause', () => {
-  cancelarFinCancion();
+  // No se cancela el watchdog aquí: en iOS 'pause' llega al terminar la pista
+  // y 'ended' puede perderse en segundo plano. El watchdog ya comprueba que
+  // la canción esté al final antes de avanzar.
   actualizarBotonPlay();
   if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
   guardarPosicion({ forzar: true });
