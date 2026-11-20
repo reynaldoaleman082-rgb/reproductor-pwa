@@ -56,10 +56,11 @@ let cancionesVisibles = [];
 let filasPista = new Map();
 let idActual = null;
 let idPistaResaltada = null;
-let urlAudioActual = null;
 let urlCaratulaActual = null;
 let urlsCaratulas = new Map(); // id de canción -> URL de su carátula en la lista
-let urlsAudioPendientes = []; // blobs del audio anterior, pendientes de liberar
+// URL estable por canción: revocar la del audio anterior mientras iOS sigue
+// leyéndolo provoca errores diferidos una vez ya avanzó currentTime.
+const urlsAudioPorId = new Map(); // id de canción -> URL del audio (estable mientras viva la canción)
 let caratulasMediaSession = new Map(); // id de canción -> carátula para la pantalla de bloqueo
 let cancionesConError = new Set(); // ids que fallaron al leer: se excluyen de la rotación
 let idCargando = null; // id del audio cuyo src se está cargando
@@ -817,11 +818,20 @@ function configurarSesionDeAudio() {
   }
 }
 
-// Revocar el blob anterior antes de cambiar de src puede cortar el audio en iOS.
-// Se liberan cuando el nuevo archivo ya está sonando (o si el play falla).
-function liberarUrlsAudioPendientes() {
-  urlsAudioPendientes.forEach((url) => URL.revokeObjectURL(url));
-  urlsAudioPendientes = [];
+// Cada canción conserva su URL mientras siga en la biblioteca. No se revoca al
+// cambiar de pista: iOS puede seguir leyendo el blob anterior y fallar después,
+// ya con currentTime avanzado, lo que antes se confundía con archivo dañado.
+function urlAudioDe(cancion) {
+  if (!urlsAudioPorId.has(cancion.id)) {
+    urlsAudioPorId.set(cancion.id, URL.createObjectURL(cancion.blob));
+  }
+  return urlsAudioPorId.get(cancion.id);
+}
+
+function liberarUrlAudio(id) {
+  const url = urlsAudioPorId.get(id);
+  if (url) URL.revokeObjectURL(url);
+  urlsAudioPorId.delete(id);
 }
 
 // Al cambiar de pista, iOS a veces aborta el play() anterior. Se reintenta una vez.
@@ -956,10 +966,8 @@ function reproducirAhora(cancion, { reanudar = false } = {}) {
   saltoPendiente = null;
   posicionPendiente = null;
   configurarSesionDeAudio();
-  if (urlAudioActual) urlsAudioPendientes.push(urlAudioActual);
-  urlAudioActual = URL.createObjectURL(cancion.blob);
   idCargando = cancion.id;
-  audio.src = urlAudioActual;
+  audio.src = urlAudioDe(cancion);
   // Safari/iOS necesita load() tras cambiar src para encadenar la siguiente pista.
   audio.load();
   idActual = cancion.id;
@@ -982,12 +990,10 @@ function reproducirAhora(cancion, { reanudar = false } = {}) {
   return reproducirAudio()
     .then(() => {
       cancionesConError.delete(idReproducido);
-      liberarUrlsAudioPendientes();
       actualizarMediaSession();
       programarFinCancion();
     })
     .catch((error) => {
-      liberarUrlsAudioPendientes();
       // El evento 'error' ya avisó si el archivo estaba dañado.
       if (!cancionesConError.has(idReproducido)) {
         mostrarAviso(`No se pudo reproducir: ${error.message}`);
@@ -1013,10 +1019,8 @@ function restaurarCancion() {
     return;
   }
   configurarSesionDeAudio();
-  if (urlAudioActual) URL.revokeObjectURL(urlAudioActual);
-  urlAudioActual = URL.createObjectURL(cancion.blob);
   idCargando = cancion.id;
-  audio.src = urlAudioActual;
+  audio.src = urlAudioDe(cancion);
   audio.load();
   const guardada = Number(posicionesGuardadas[cancion.id]) || 0;
   posicionPendiente = guardada > 1 ? guardada : null;
@@ -1043,7 +1047,6 @@ function alternar() {
     reproducirAudio()
       .then(() => {
         cancionesConError.delete(idActual);
-        liberarUrlsAudioPendientes();
         actualizarMediaSession();
         programarFinCancion();
       })
@@ -1147,9 +1150,6 @@ function detener() {
   audio.pause();
   audio.removeAttribute('src');
   audio.load();
-  if (urlAudioActual) URL.revokeObjectURL(urlAudioActual);
-  liberarUrlsAudioPendientes();
-  urlAudioActual = null;
   historialAleatorio = [];
   if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'none';
   actualizarMiniProgreso();
@@ -1160,6 +1160,7 @@ function detener() {
 
 async function eliminar(cancion) {
   if (cancion.id === idActual) detener();
+  liberarUrlAudio(cancion.id);
   cancionesConError.delete(cancion.id);
   olvidarPosicion(cancion.id);
   await operarDB('readwrite', (almacen) => almacen.delete(cancion.id));
@@ -1283,7 +1284,6 @@ function registrarAccionesRemotas() {
       reproducirAudio()
         .then(() => {
           cancionesConError.delete(idActual);
-          liberarUrlsAudioPendientes();
           actualizarMediaSession();
           programarFinCancion();
         })
@@ -1470,6 +1470,7 @@ async function eliminarDuplicados() {
   });
 
   borradas.forEach((cancion) => {
+    liberarUrlAudio(cancion.id);
     olvidarPosicion(cancion.id);
     cancionesConError.delete(cancion.id);
   });
@@ -1678,6 +1679,14 @@ audio.addEventListener('error', () => {
   // No es un archivo dañado: marcarlo encadenaba avances infinitos.
   if (audio.error?.code === 1) return;
   cancelarFinCancion();
+  // Si ya llevaba un rato sonando, el fallo es una interrupción (llamada, Siri,
+  // cambio de app, blob que iOS dejó de leer), no un archivo dañado. Marcarlo
+  // sacaría una pista válida de la rotación y encadenaría avisos engañosos.
+  if (audio.currentTime > 2) {
+    mostrarAviso('Se interrumpió la reproducción; se pasa al siguiente.');
+    avanzarAlSiguiente();
+    return;
+  }
   cancionesConError.add(idConError);
   historialAleatorio = [];
   olvidarPosicion(idConError);
