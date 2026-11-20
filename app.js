@@ -17,23 +17,43 @@ const tiempoTotal = $('#tiempo-total');
 const estadoAlmacenamiento = $('#estado-almacenamiento');
 const contenido = $('.contenido');
 const portada = $('.portada');
+const herramientas = $('#herramientas');
+const busqueda = $('#busqueda');
+const limpiarBusqueda = $('#limpiar-busqueda');
+const orden = $('#orden');
+const sinResultados = $('#sin-resultados');
+const botonDuplicados = $('#boton-duplicados');
 
 const DB_NAME = 'reproductor-offline';
 const STORE = 'tracks';
 const CLAVE_PREFERENCIAS = 'reproductor-preferencias';
+const CLAVE_POSICIONES = 'reproductor-posiciones';
 const MODOS_REPETICION = ['off', 'all', 'one'];
 const ETIQUETAS_REPETICION = { off: 'desactivada', all: 'todas', one: 'una canción' };
+const ORDENES = ['fecha', 'titulo', 'artista', 'duracion'];
+const UMBRAL_ESPACIO = 0.9; // se deja libre al menos el 10 % del almacenamiento
+const LOTE_IMPORTACION = 4;
 
 const EXTENSIONES = ['mp3', 'm4a', 'aac', 'wav', 'ogg', 'oga', 'flac', 'aiff', 'aif', 'caf', 'opus'];
 
 let baseDatos;
 let canciones = [];
+let cancionesVisibles = [];
+let filasPista = new Map();
 let idActual = null;
+let idPistaResaltada = null;
 let urlAudioActual = null;
 let urlCaratulaActual = null;
-let urlsCaratulas = [];
+let urlsCaratulas = new Map(); // id de canción -> URL de su carátula en la lista
 let temporizadorAviso;
 let temporizadorSalidaAviso;
+
+let textoBusqueda = '';
+let ordenActual = 'fecha';
+let posicionesGuardadas = {};
+let posicionPendiente = null;
+let ultimaGuardaPosicion = 0;
+let ultimaPosicionInformada = 0;
 
 // Preferencias de reproducción (se conservan entre sesiones)
 let modoRepeticion = 'off'; // off | all | one
@@ -61,6 +81,7 @@ function cargarPreferencias() {
       modoRepeticion = datos.modoRepeticion;
     }
     aleatorio = Boolean(datos.aleatorio);
+    if (ORDENES.includes(datos.orden)) ordenActual = datos.orden;
   } catch (_) {
     // Preferencias corruptas: se usan los valores por defecto.
   }
@@ -70,11 +91,44 @@ function guardarPreferencias() {
   try {
     localStorage.setItem(CLAVE_PREFERENCIAS, JSON.stringify({
       modoRepeticion,
-      aleatorio
+      aleatorio,
+      orden: ordenActual
     }));
   } catch (_) {
     // Almacenamiento no disponible: los botones siguen funcionando en esta sesión.
   }
+}
+
+function leerPosiciones() {
+  try {
+    return JSON.parse(localStorage.getItem(CLAVE_POSICIONES) || '{}');
+  } catch (_) {
+    return {};
+  }
+}
+
+// Quita acentos para que "Musica" encuentre "Música"
+function normalizar(texto) {
+  return String(texto || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+}
+
+function aplicarFiltroYOrden() {
+  const termino = normalizar(textoBusqueda).trim();
+  cancionesVisibles = canciones.filter((cancion) => {
+    if (!termino) return true;
+    return normalizar(`${cancion.titulo} ${cancion.artista} ${cancion.album} ${cancion.nombre}`)
+      .includes(termino);
+  });
+
+  cancionesVisibles.sort((a, b) => {
+    if (ordenActual === 'fecha') return b.fecha - a.fecha;
+    if (ordenActual === 'duracion') return (a.duracion || 0) - (b.duracion || 0);
+    const clave = ordenActual === 'artista' ? 'artista' : 'titulo';
+    return normalizar(a[clave]).localeCompare(normalizar(b[clave]));
+  });
 }
 
 function actualizarBotonesModos() {
@@ -151,8 +205,9 @@ async function operarDB(modo, accion) {
 
 async function cargarCanciones() {
   canciones = (await operarDB('readonly', (almacen) => almacen.getAll())) || [];
-  canciones.sort((a, b) => b.fecha - a.fecha);
-  dibujarBiblioteca({ animar: true });
+  aplicarFiltroYOrden();
+  sincronizarCaratulas();
+  renderizarBiblioteca({ animar: true });
   dibujarReproductor();
   await mostrarEspacio();
   if (idActual && !canciones.some((c) => c.id === idActual)) {
@@ -277,9 +332,35 @@ function idNuevo() {
   return `c-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
+// Las carátulas ID3 suelen ser enormes. Se guarda una versión cuadrada de hasta
+// 300 px en JPEG; si el navegador no puede decodificarla, se conserva el original.
+async function reducirCaratula(blob) {
+  if (!blob || !globalThis.createImageBitmap) return blob;
+  try {
+    const bitmap = await createImageBitmap(blob);
+    const lado = Math.min(bitmap.width, bitmap.height, 300);
+    const origenX = (bitmap.width - lado) / 2;
+    const origenY = (bitmap.height - lado) / 2;
+    const lienzo = document.createElement('canvas');
+    lienzo.width = lado;
+    lienzo.height = lado;
+    lienzo.getContext('2d').drawImage(
+      bitmap, origenX, origenY, lado, lado, 0, 0, lado, lado
+    );
+    bitmap.close?.();
+    const reducida = await new Promise((resolver) =>
+      lienzo.toBlob(resolver, 'image/jpeg', 0.82)
+    );
+    return reducida || blob;
+  } catch (_) {
+    return blob;
+  }
+}
+
 async function prepararCancion(archivo) {
   const cabecera = await archivo.slice(0, 256 * 1024).arrayBuffer();
   const meta = leerID3(cabecera);
+  const caratula = await reducirCaratula(meta.caratula);
   return {
     id: idNuevo(),
     nombre: archivo.name,
@@ -288,7 +369,8 @@ async function prepararCancion(archivo) {
     titulo: meta.titulo || nombreLimpio(archivo.name),
     artista: meta.artista || 'Artista desconocido',
     album: meta.album || 'Álbum desconocido',
-    caratula: meta.caratula,
+    caratula,
+    duracion: 0,
     fecha: Date.now()
   };
 }
@@ -303,9 +385,15 @@ function formatoTiempo(segundos) {
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
 }
 
-function liberarCaratulas() {
-  urlsCaratulas.forEach((url) => URL.revokeObjectURL(url));
-  urlsCaratulas = [];
+// Solo libera las carátulas de canciones que ya no están en la biblioteca:
+// las filas que se reutilizan siguen mostrando las demás.
+function sincronizarCaratulas() {
+  const vigentes = new Set(canciones.filter((c) => c.caratula).map((c) => c.id));
+  for (const [id, url] of urlsCaratulas) {
+    if (vigentes.has(id)) continue;
+    URL.revokeObjectURL(url);
+    urlsCaratulas.delete(id);
+  }
 }
 
 function liberarCaratulaActual() {
@@ -318,9 +406,14 @@ function crearUrlCaratula(cancion) {
   return URL.createObjectURL(cancion.caratula);
 }
 
+// Cada carátula se crea una sola vez y se reutiliza en todos los renderizados
 function urlCaratulaLista(cancion) {
-  const url = crearUrlCaratula(cancion);
-  if (url) urlsCaratulas.push(url);
+  if (!cancion?.caratula) return null;
+  let url = urlsCaratulas.get(cancion.id);
+  if (!url) {
+    url = URL.createObjectURL(cancion.caratula);
+    urlsCaratulas.set(cancion.id, url);
+  }
   return url;
 }
 
@@ -331,65 +424,122 @@ function crearElemento(etiqueta, clase, texto) {
   return elemento;
 }
 
-function dibujarBiblioteca({ animar = false } = {}) {
-  liberarCaratulas();
-  lista.replaceChildren();
-  vistaVacia.hidden = canciones.length > 0;
-  lista.hidden = canciones.length === 0;
+function crearEcualizador() {
+  const ecualizador = crearElemento('span', 'pista__ecualizador');
+  ecualizador.append(crearElemento('i'), crearElemento('i'), crearElemento('i'));
+  return ecualizador;
+}
 
-  canciones.forEach((cancion, indice) => {
-    const item = crearElemento('li', `pista${cancion.id === idActual ? ' is-actual' : ''}`);
-    if (animar) {
-      item.classList.add('pista--entrando');
-      item.style.setProperty('--retraso', `${Math.min(indice, 12) * 35}ms`);
+function crearFila(cancion, indice, animar) {
+  const item = crearElemento('li', `pista${cancion.id === idActual ? ' is-actual' : ''}`);
+  if (animar) {
+    item.classList.add('pista--entrando');
+    item.style.setProperty('--retraso', `${Math.min(indice, 12) * 35}ms`);
+    item.addEventListener('animationend', (evento) => {
+      if (evento.animationName === 'subir-fila') item.classList.remove('pista--entrando');
+    });
+  }
+
+  const botonReproducir = crearElemento('button', 'pista__boton');
+  botonReproducir.type = 'button';
+  botonReproducir.setAttribute('aria-label', `Reproducir ${cancion.titulo}`);
+  botonReproducir.addEventListener('click', () => reproducir(cancion, { reanudar: true }));
+
+  const arte = crearElemento('span', 'pista__arte');
+  const url = urlCaratulaLista(cancion);
+  if (url) {
+    const imagen = crearElemento('img', 'pista__caratula');
+    imagen.src = url;
+    imagen.alt = '';
+    arte.append(imagen);
+  } else {
+    const hueco = crearElemento('span', 'pista__caratula-vacia');
+    hueco.append(crearIcono('musica'));
+    arte.append(hueco);
+  }
+  if (cancion.id === idActual) arte.append(crearEcualizador());
+  botonReproducir.append(arte);
+
+  const textos = crearElemento('span', 'pista__textos');
+  textos.append(
+    crearElemento('strong', '', cancion.titulo),
+    crearElemento('small', '', cancion.artista)
+  );
+  botonReproducir.append(textos);
+
+  const borrar = crearElemento('button', 'pista__borrar');
+  borrar.type = 'button';
+  borrar.setAttribute('aria-label', `Eliminar ${cancion.titulo}`);
+  borrar.append(crearIcono('x'));
+  borrar.addEventListener('click', () => eliminar(cancion));
+
+  item.append(
+    botonReproducir,
+    crearElemento('span', 'pista__duracion', formatoTiempo(cancion.duracion || 0)),
+    borrar
+  );
+  return item;
+}
+
+function actualizarFila(cancion, fila) {
+  const duracion = fila.querySelector('.pista__duracion');
+  const texto = formatoTiempo(cancion.duracion || 0);
+  if (duracion.textContent !== texto) duracion.textContent = texto;
+  const titulo = fila.querySelector('.pista__textos strong');
+  if (titulo.textContent !== cancion.titulo) titulo.textContent = cancion.titulo;
+  const artista = fila.querySelector('.pista__textos small');
+  if (artista.textContent !== cancion.artista) artista.textContent = cancion.artista;
+}
+
+// Solo cambia el resaltado y el ecualizador: no se toca el resto de la lista
+function actualizarPistaActual() {
+  if (idPistaResaltada === idActual) return;
+  const anterior = filasPista.get(idPistaResaltada);
+  if (anterior) {
+    anterior.classList.remove('is-actual');
+    anterior.querySelector('.pista__ecualizador')?.remove();
+  }
+  const nueva = filasPista.get(idActual);
+  if (nueva) {
+    nueva.classList.add('is-actual');
+    if (!nueva.querySelector('.pista__ecualizador')) {
+      nueva.querySelector('.pista__arte')?.append(crearEcualizador());
     }
+  }
+  idPistaResaltada = idActual;
+}
 
-    const botonReproducir = crearElemento('button', 'pista__boton');
-    botonReproducir.type = 'button';
-    botonReproducir.setAttribute('aria-label', `Reproducir ${cancion.titulo}`);
+// Reconcilia las filas existentes en lugar de destruir y recrear la lista
+function renderizarBiblioteca({ animar = false } = {}) {
+  const visibles = new Set(cancionesVisibles.map((c) => c.id));
 
-    const arte = crearElemento('span', 'pista__arte');
-    const url = urlCaratulaLista(cancion);
-    if (url) {
-      const imagen = crearElemento('img', 'pista__caratula');
-      imagen.src = url;
-      imagen.alt = '';
-      arte.append(imagen);
+  for (const [id, fila] of filasPista) {
+    if (!visibles.has(id)) {
+      fila.remove();
+      filasPista.delete(id);
+    }
+  }
+
+  cancionesVisibles.forEach((cancion, indice) => {
+    let fila = filasPista.get(cancion.id);
+    if (!fila) {
+      fila = crearFila(cancion, indice, animar);
+      filasPista.set(cancion.id, fila);
     } else {
-      const hueco = crearElemento('span', 'pista__caratula-vacia');
-      hueco.append(crearIcono('musica'));
-      arte.append(hueco);
+      actualizarFila(cancion, fila);
     }
-
-    // El ecualizador solo se crea en la pista en curso
-    if (cancion.id === idActual) {
-      const ecualizador = crearElemento('span', 'pista__ecualizador');
-      ecualizador.append(crearElemento('i'), crearElemento('i'), crearElemento('i'));
-      arte.append(ecualizador);
+    if (lista.children[indice] !== fila) {
+      lista.insertBefore(fila, lista.children[indice] || null);
     }
-    botonReproducir.append(arte);
-
-    const textos = crearElemento('span', 'pista__textos');
-    textos.append(
-      crearElemento('strong', '', cancion.titulo),
-      crearElemento('small', '', cancion.artista)
-    );
-    botonReproducir.append(textos);
-    botonReproducir.addEventListener('click', () => reproducir(cancion));
-
-    const borrar = crearElemento('button', 'pista__borrar');
-    borrar.type = 'button';
-    borrar.setAttribute('aria-label', `Eliminar ${cancion.titulo}`);
-    borrar.append(crearIcono('x'));
-    borrar.addEventListener('click', () => eliminar(cancion));
-
-    item.append(
-      botonReproducir,
-      crearElemento('span', 'pista__duracion', formatoTiempo(cancion.duracion || 0)),
-      borrar
-    );
-    lista.append(item);
   });
+
+  idPistaResaltada = idActual;
+  vistaVacia.hidden = canciones.length > 0;
+  herramientas.hidden = canciones.length === 0;
+  lista.hidden = cancionesVisibles.length === 0;
+  sinResultados.hidden = !(
+    textoBusqueda.trim() && canciones.length > 0 && cancionesVisibles.length === 0
+  );
 }
 
 function cancionActual() {
@@ -493,26 +643,30 @@ function configurarSesionDeAudio() {
   }
 }
 
-function reproducir(cancion) {
+function reproducir(cancion, { reanudar = false } = {}) {
+  if (!cancion) return;
+  guardarPosicion({ forzar: true }); // recuerda dónde iba la canción anterior
   configurarSesionDeAudio();
   if (urlAudioActual) URL.revokeObjectURL(urlAudioActual);
   urlAudioActual = URL.createObjectURL(cancion.blob);
   audio.src = urlAudioActual;
   idActual = cancion.id;
+  const guardada = reanudar ? Number(posicionesGuardadas[cancion.id]) || 0 : 0;
+  posicionPendiente = guardada > 1 ? guardada : null;
   audio.currentTime = 0;
   actualizarMiniProgreso();
-  dibujarBiblioteca();
+  actualizarPistaActual();
   dibujarReproductor();
   animarCambioDePortada();
   actualizarBotonPlay();
   audio.play()
-    .then(actualizarMediaSession)
+    .then(() => actualizarMediaSession())
     .catch((error) => mostrarAviso(`No se pudo reproducir: ${error.message}`));
 }
 
 function alternar() {
   if (!idActual) {
-    if (canciones.length) reproducir(canciones[0]);
+    if (cancionesVisibles.length) reproducir(cancionesVisibles[0], { reanudar: true });
     return;
   }
   if (audio.paused) {
@@ -524,19 +678,20 @@ function alternar() {
 }
 
 function indiceActual() {
-  return canciones.findIndex((c) => c.id === idActual);
+  return cancionesVisibles.findIndex((c) => c.id === idActual);
 }
 
-// Elige una canción no escuchada recientemente antes de repetirlas
+// Elige una canción no escuchada recientemente antes de repetirlas.
+// Se usa la lista visible para que el aleatorio respete el filtro activo.
 function elegirIndiceAleatorio(indiceDesde) {
-  if (canciones.length < 2) return indiceDesde;
-  let disponibles = canciones
+  if (cancionesVisibles.length < 2) return indiceDesde;
+  let disponibles = cancionesVisibles
     .map((_, indice) => indice)
     .filter((indice) => indice !== indiceDesde && !historialAleatorio.includes(indice));
 
   if (!disponibles.length) {
     historialAleatorio = [];
-    disponibles = canciones
+    disponibles = cancionesVisibles
       .map((_, indice) => indice)
       .filter((indice) => indice !== indiceDesde);
   }
@@ -547,24 +702,24 @@ function elegirIndiceAleatorio(indiceDesde) {
 }
 
 function cambiarPista(delta, desdeFinal = false) {
-  if (!canciones.length) return;
+  if (!cancionesVisibles.length) return;
 
   const indice = indiceActual();
   if (indice < 0) {
-    reproducir(canciones[0]);
+    reproducir(cancionesVisibles[0]);
     return;
   }
 
   // "Repetir una" solo actúa al terminar naturalmente la canción
   if (desdeFinal && modoRepeticion === 'one') {
-    reproducir(canciones[indice]);
+    reproducir(cancionesVisibles[indice]);
     return;
   }
 
   let destino;
   if (delta > 0) {
     destino = aleatorio ? elegirIndiceAleatorio(indice) : indice + 1;
-    if (destino >= canciones.length) {
+    if (destino >= cancionesVisibles.length) {
       if (modoRepeticion === 'all') {
         destino = 0;
       } else {
@@ -578,7 +733,7 @@ function cambiarPista(delta, desdeFinal = false) {
       : indice - 1;
     if (destino < 0) {
       if (modoRepeticion === 'all') {
-        destino = canciones.length - 1;
+        destino = cancionesVisibles.length - 1;
       } else {
         audio.currentTime = 0;
         actualizarPosicion();
@@ -587,7 +742,7 @@ function cambiarPista(delta, desdeFinal = false) {
     }
   }
 
-  reproducir(canciones[destino]);
+  reproducir(cancionesVisibles[destino]);
 }
 
 function anterior() {
@@ -608,13 +763,14 @@ function detener() {
   historialAleatorio = [];
   if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'none';
   actualizarMiniProgreso();
-  dibujarBiblioteca();
+  actualizarPistaActual();
   dibujarReproductor();
   actualizarBotonPlay();
 }
 
 async function eliminar(cancion) {
   if (cancion.id === idActual) detener();
+  olvidarPosicion(cancion.id);
   await operarDB('readwrite', (almacen) => almacen.delete(cancion.id));
   await cargarCanciones();
   mostrarAviso(`Eliminada: ${cancion.titulo}`);
@@ -650,12 +806,16 @@ async function actualizarMediaSession() {
     artwork
   });
   navigator.mediaSession.playbackState = audio.paused ? 'paused' : 'playing';
-  actualizarPosicion();
+  actualizarPosicion({ forzar: true });
 }
 
-function actualizarPosicion() {
+function actualizarPosicion({ forzar = false } = {}) {
   if (!('mediaSession' in navigator) || !navigator.mediaSession.setPositionState) return;
   if (!Number.isFinite(audio.duration) || audio.duration <= 0) return;
+  const ahora = Date.now();
+  // timeupdate dispara varias veces por segundo: basta con informar una vez
+  if (!forzar && ahora - ultimaPosicionInformada < 1000) return;
+  ultimaPosicionInformada = ahora;
   try {
     navigator.mediaSession.setPositionState({
       duration: audio.duration,
@@ -665,6 +825,29 @@ function actualizarPosicion() {
   } catch (_) {
     // Algunos motores rechazan valores intermedios; no es grave.
   }
+}
+
+function persistirPosiciones() {
+  try {
+    localStorage.setItem(CLAVE_POSICIONES, JSON.stringify(posicionesGuardadas));
+  } catch (_) {
+    // Sin sitio en localStorage: la posición solo se recuerda en esta sesión.
+  }
+}
+
+// Se llama desde timeupdate (limitado a 5 s) y al pausar o salir de la app
+function guardarPosicion({ forzar = false } = {}) {
+  if (!idActual || audio.ended || audio.currentTime < 1) return;
+  const ahora = Date.now();
+  if (!forzar && ahora - ultimaGuardaPosicion < 5000) return;
+  ultimaGuardaPosicion = ahora;
+  posicionesGuardadas[idActual] = audio.currentTime;
+  persistirPosiciones();
+}
+
+function olvidarPosicion(id) {
+  delete posicionesGuardadas[id];
+  persistirPosiciones();
 }
 
 function registrarAccionesRemotas() {
@@ -679,12 +862,15 @@ function registrarAccionesRemotas() {
     nexttrack: () => cambiarPista(1),
     seekto: (detalles) => {
       if (typeof detalles.position === 'number') audio.currentTime = detalles.position;
+      actualizarPosicion({ forzar: true });
     },
     seekbackward: (detalles) => {
       audio.currentTime = Math.max(0, audio.currentTime - (detalles.seekOffset || 10));
+      actualizarPosicion({ forzar: true });
     },
     seekforward: (detalles) => {
       audio.currentTime = Math.min(audio.duration || 0, audio.currentTime + (detalles.seekOffset || 10));
+      actualizarPosicion({ forzar: true });
     }
   };
   for (const [nombre, manejador] of Object.entries(acciones)) {
@@ -734,6 +920,36 @@ function cerrarPantalla() {
 // Eventos
 // ---------------------------------------------------------------------------
 
+function claveArchivo(nombre, tamaño) {
+  return `${nombre}-${tamaño}`;
+}
+
+async function hayEspacioPara(archivos) {
+  if (!navigator.storage?.estimate) return true;
+  try {
+    const { usage, quota } = await navigator.storage.estimate();
+    if (!quota) return true;
+    const bytes = archivos.reduce((total, archivo) => total + archivo.size, 0);
+    return usage + bytes <= quota * UMBRAL_ESPACIO;
+  } catch (_) {
+    return true;
+  }
+}
+
+// Todas las canciones de un lote entran en una sola transacción
+async function guardarCanciones(nuevas) {
+  if (!nuevas.length) return;
+  const db = await baseDatos;
+  return new Promise((resolver, rechazar) => {
+    const transaccion = db.transaction(STORE, 'readwrite');
+    const almacen = transaccion.objectStore(STORE);
+    nuevas.forEach((cancion) => almacen.put(cancion));
+    transaccion.oncomplete = () => resolver();
+    transaccion.onerror = () => rechazar(transaccion.error);
+    transaccion.onabort = () => rechazar(transaccion.error || new Error('Transacción cancelada'));
+  });
+}
+
 async function importar(archivos) {
   const listaArchivos = Array.from(archivos || []).filter(esAudio);
   if (!listaArchivos.length) {
@@ -741,22 +957,85 @@ async function importar(archivos) {
     return;
   }
 
-  const yaExistentes = new Set(canciones.map((c) => `${c.nombre}-${c.blob.size}`));
-  let anadidos = 0;
+  if (!(await hayEspacioPara(listaArchivos))) {
+    mostrarAviso('No queda espacio suficiente en el teléfono para esas canciones.');
+    return;
+  }
 
-  for (const archivo of listaArchivos) {
-    const clave = `${archivo.name}-${archivo.size}`;
-    if (yaExistentes.has(clave)) continue;
-    yaExistentes.add(clave);
-    const cancion = await prepararCancion(archivo);
-    await operarDB('readwrite', (almacen) => almacen.put(cancion));
-    anadidos++;
+  const yaExistentes = new Set(
+    canciones.map((c) => claveArchivo(c.nombre, c.blob.size))
+  );
+  let anadidos = 0;
+  let errorGuardado = null;
+
+  for (let i = 0; i < listaArchivos.length; i += LOTE_IMPORTACION) {
+    const lote = listaArchivos.slice(i, i + LOTE_IMPORTACION).filter((archivo) => {
+      const clave = claveArchivo(archivo.name, archivo.size);
+      if (yaExistentes.has(clave)) return false;
+      yaExistentes.add(clave);
+      return true;
+    });
+    if (!lote.length) continue;
+
+    const nuevas = await Promise.all(lote.map(prepararCancion));
+    try {
+      await guardarCanciones(nuevas);
+      anadidos += nuevas.length;
+    } catch (error) {
+      errorGuardado = error;
+      break;
+    }
   }
 
   await cargarCanciones();
+  if (errorGuardado) {
+    const esCuota = ['QuotaExceededError', 'NS_ERROR_DOM_QUOTA_REACHED']
+      .includes(errorGuardado.name);
+    mostrarAviso(esCuota
+      ? 'No se pudieron guardar todas las canciones: el teléfono se ha quedado sin espacio.'
+      : `No se pudieron guardar todas las canciones: ${errorGuardado.message}`);
+    return;
+  }
   mostrarAviso(anadidos
     ? `${anadidos} canción(es) guardadas en este teléfono. Funcionan sin internet.`
     : 'Esas canciones ya estaban en la biblioteca.');
+}
+
+// Conserva la copia más reciente de cada canción y borra las anteriores
+async function eliminarDuplicados() {
+  const grupos = new Map();
+  for (const cancion of canciones) {
+    const clave = claveArchivo(cancion.nombre, cancion.blob.size);
+    if (!grupos.has(clave)) grupos.set(clave, []);
+    grupos.get(clave).push(cancion);
+  }
+
+  const borradas = [];
+  for (const grupo of grupos.values()) {
+    if (grupo.length < 2) continue;
+    grupo.sort((a, b) => b.fecha - a.fecha);
+    borradas.push(...grupo.slice(1));
+  }
+
+  if (!borradas.length) {
+    mostrarAviso('No hay canciones duplicadas.');
+    return;
+  }
+
+  const db = await baseDatos;
+  await new Promise((resolver, rechazar) => {
+    const transaccion = db.transaction(STORE, 'readwrite');
+    const almacen = transaccion.objectStore(STORE);
+    borradas.forEach((cancion) => almacen.delete(cancion.id));
+    transaccion.oncomplete = () => resolver();
+    transaccion.onerror = () => rechazar(transaccion.error);
+    transaccion.onabort = () => rechazar(transaccion.error);
+  });
+
+  borradas.forEach((cancion) => olvidarPosicion(cancion.id));
+  if (borradas.some((cancion) => cancion.id === idActual)) detener();
+  await cargarCanciones();
+  mostrarAviso(`${borradas.length} canción(es) duplicada(s) eliminada(s).`);
 }
 
 $('#boton-importar').addEventListener('click', () => entradaArchivos.click());
@@ -765,6 +1044,34 @@ $('#boton-importar-vacio').addEventListener('click', () => entradaArchivos.click
 entradaArchivos.addEventListener('change', async () => {
   await importar(entradaArchivos.files);
   entradaArchivos.value = '';
+});
+
+botonDuplicados.addEventListener('click', () => {
+  eliminarDuplicados()
+    .catch((error) => mostrarAviso(`No se pudieron borrar los duplicados: ${error.message}`));
+});
+
+busqueda.addEventListener('input', () => {
+  textoBusqueda = busqueda.value;
+  limpiarBusqueda.hidden = !textoBusqueda;
+  aplicarFiltroYOrden();
+  renderizarBiblioteca();
+});
+
+limpiarBusqueda.addEventListener('click', () => {
+  busqueda.value = '';
+  textoBusqueda = '';
+  limpiarBusqueda.hidden = true;
+  aplicarFiltroYOrden();
+  renderizarBiblioteca();
+  busqueda.focus();
+});
+
+orden.addEventListener('change', () => {
+  ordenActual = ORDENES.includes(orden.value) ? orden.value : 'fecha';
+  guardarPreferencias();
+  aplicarFiltroYOrden();
+  renderizarBiblioteca({ animar: true });
 });
 
 $('#boton-play').addEventListener('click', alternar);
@@ -791,6 +1098,8 @@ contenido.addEventListener('scroll', () => {
 progreso.addEventListener('input', () => {
   if (Number.isFinite(audio.duration) && audio.duration > 0) {
     audio.currentTime = (Number(progreso.value) / 100) * audio.duration;
+    guardarPosicion({ forzar: true });
+    actualizarPosicion({ forzar: true });
   }
 });
 
@@ -799,15 +1108,27 @@ audio.addEventListener('timeupdate', () => {
   tiempoTotal.textContent = formatoTiempo(audio.duration);
   progreso.value = audio.duration ? (audio.currentTime / audio.duration) * 100 : 0;
   actualizarMiniProgreso();
+  guardarPosicion();
   actualizarPosicion();
 });
 
 audio.addEventListener('loadedmetadata', () => {
+  if (posicionPendiente !== null) {
+    const destino = Math.min(posicionPendiente, Math.max(0, (audio.duration || 0) - 1));
+    if (destino > 0) audio.currentTime = destino;
+    posicionPendiente = null;
+  }
+  tiempoActual.textContent = formatoTiempo(audio.currentTime);
   tiempoTotal.textContent = formatoTiempo(audio.duration);
+  progreso.value = audio.duration ? (audio.currentTime / audio.duration) * 100 : 0;
   actualizarMiniProgreso();
+  actualizarPosicion({ forzar: true });
+
   const cancion = cancionActual();
   if (cancion && Number.isFinite(audio.duration) && audio.duration > 0) {
     cancion.duracion = audio.duration;
+    const fila = filasPista.get(cancion.id);
+    if (fila) actualizarFila(cancion, fila);
     operarDB('readwrite', (almacen) => almacen.put(cancion)).catch(() => {});
   }
 });
@@ -815,16 +1136,27 @@ audio.addEventListener('loadedmetadata', () => {
 audio.addEventListener('play', () => {
   actualizarBotonPlay();
   if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
-  actualizarPosicion();
+  actualizarPosicion({ forzar: true });
 });
 
 audio.addEventListener('pause', () => {
   actualizarBotonPlay();
   if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
-  actualizarPosicion();
+  guardarPosicion({ forzar: true });
+  actualizarPosicion({ forzar: true });
 });
 
-audio.addEventListener('ended', () => cambiarPista(1, true));
+audio.addEventListener('ended', () => {
+  if (idActual) olvidarPosicion(idActual);
+  posicionPendiente = null;
+  cambiarPista(1, true);
+});
+
+// iOS puede suspender la app sin avisar: se guarda el punto de escucha al salir
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') guardarPosicion({ forzar: true });
+});
+window.addEventListener('pagehide', () => guardarPosicion({ forzar: true }));
 
 // ---------------------------------------------------------------------------
 // Arranque
@@ -833,6 +1165,8 @@ audio.addEventListener('ended', () => cambiarPista(1, true));
 async function iniciar() {
   baseDatos = abrirBaseDatos();
   cargarPreferencias();
+  posicionesGuardadas = leerPosiciones();
+  orden.value = ordenActual;
   actualizarBotonesModos();
   actualizarBotonPlay();
   registrarAccionesRemotas();

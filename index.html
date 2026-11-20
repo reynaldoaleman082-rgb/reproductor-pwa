@@ -21,6 +21,13 @@
   <!-- Sprite de iconos vectoriales: una sola familia, escalable y sin emojis -->
   <svg class="sprite" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false">
     <symbol id="i-mas" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-buscar" viewBox="0 0 24 24">
+      <circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/>
+    </symbol>
+    <symbol id="i-duplicados" viewBox="0 0 24 24">
+      <rect x="8" y="8" width="12" height="12" rx="2"/>
+      <path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/>
+    </symbol>
     <symbol id="i-musica" viewBox="0 0 24 24">
       <path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>
     </symbol>
@@ -73,13 +80,36 @@
           <span id="estado-almacenamiento" class="cabecera__estado">Calculando espacio…</span>
         </span>
       </div>
-      <button id="boton-importar" class="boton boton--primario" type="button">
-        <svg class="icono icono--sm" aria-hidden="true"><use href="#i-mas"></use></svg>
-        <span>Importar</span>
-      </button>
+      <div class="cabecera__acciones">
+        <button id="boton-duplicados" class="boton boton--secundario" type="button"
+                aria-label="Eliminar canciones duplicadas" title="Eliminar duplicados">
+          <svg class="icono icono--sm" aria-hidden="true"><use href="#i-duplicados"></use></svg>
+        </button>
+        <button id="boton-importar" class="boton boton--primario" type="button" aria-label="Importar canciones">
+          <svg class="icono icono--sm" aria-hidden="true"><use href="#i-mas"></use></svg>
+          <span>Importar</span>
+        </button>
+      </div>
     </header>
 
     <main class="contenido">
+      <section id="herramientas" class="herramientas" hidden aria-label="Herramientas de la biblioteca">
+        <label class="buscador">
+          <svg class="icono icono--sm" aria-hidden="true"><use href="#i-buscar"></use></svg>
+          <input id="busqueda" type="search" inputmode="search" autocomplete="off"
+                 placeholder="Buscar canción o artista" aria-label="Buscar canción o artista">
+          <button id="limpiar-busqueda" class="buscador__limpiar" type="button" aria-label="Borrar búsqueda" hidden>
+            <svg class="icono icono--sm" aria-hidden="true"><use href="#i-x"></use></svg>
+          </button>
+        </label>
+        <select id="orden" class="orden" aria-label="Ordenar biblioteca">
+          <option value="fecha">Más recientes</option>
+          <option value="titulo">Por título</option>
+          <option value="artista">Por artista</option>
+          <option value="duracion">Por duración</option>
+        </select>
+      </section>
+
       <section id="vacio" class="vacio" hidden>
         <div class="vacio__icono" aria-hidden="true">
           <svg class="icono"><use href="#i-musica"></use></svg>
@@ -89,6 +119,10 @@
         <button id="boton-importar-vacio" class="boton boton--primario" type="button">Elegir canciones</button>
         <p class="vacio__aviso">En iOS, pulsa <strong>Compartir → Añadir a la pantalla de inicio</strong> para usarla como una app.</p>
       </section>
+
+      <p id="sin-resultados" class="sin-resultados" hidden>
+        No hay canciones que coincidan con la búsqueda.
+      </p>
 
       <ul id="lista-canciones" class="lista" aria-label="Biblioteca de música"></ul>
     </main>

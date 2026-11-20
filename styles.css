@@ -104,6 +104,7 @@ button { font: inherit; color: inherit; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.cabecera__acciones { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
 
 .boton {
   position: relative;
@@ -122,6 +123,13 @@ button { font: inherit; color: inherit; }
   transition: transform var(--tiempo) var(--curva), filter var(--tiempo) var(--curva);
 }
 .boton--primario { background: var(--acento); color: #fff; }
+.boton--secundario {
+  width: 44px;
+  padding: 0;
+  background: var(--superficie-2);
+  border: 1px solid var(--borde);
+  color: var(--secundario);
+}
 .boton:active { transform: scale(.97); filter: brightness(1.12); }
 .boton::after,
 .boton-icono::after {
@@ -146,6 +154,71 @@ button { font: inherit; color: inherit; }
   -webkit-overflow-scrolling: touch;
   overscroll-behavior: contain;
   padding: 12px 14px 16px;
+}
+
+/* ------------------------------------------------------------ herramientas */
+.herramientas { display: flex; gap: 8px; margin-bottom: 12px; }
+.buscador {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 6px 0 14px;
+  border-radius: 999px;
+  border: 1px solid var(--borde);
+  background: var(--superficie);
+  color: var(--secundario);
+}
+.buscador input {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 100%;
+  border: 0;
+  outline: 0;
+  background: none;
+  color: var(--texto);
+  font: inherit;
+  font-size: 15px;
+  -webkit-appearance: none;
+  appearance: none;
+}
+.buscador input::placeholder { color: var(--secundario); opacity: .85; }
+/* iOS dibuja su propia X: usamos nuestro botón, que tiene 44 pt de área táctil */
+.buscador input::-webkit-search-cancel-button { -webkit-appearance: none; appearance: none; }
+.buscador__limpiar {
+  flex: 0 0 auto;
+  width: 44px;
+  height: 44px;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: var(--secundario);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+.buscador__limpiar:active { color: var(--texto); background: var(--superficie-2); }
+.orden {
+  flex: 0 0 auto;
+  max-width: 132px;
+  min-height: 44px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid var(--borde);
+  background: var(--superficie);
+  color: var(--texto);
+  font: inherit;
+  font-size: 13px;
+}
+.sin-resultados {
+  margin: 28px auto;
+  max-width: 320px;
+  text-align: center;
+  color: var(--secundario);
+  font-size: 14px;
 }
 
 .vacio {
@@ -182,6 +255,9 @@ button { font: inherit; color: inherit; }
   border-radius: var(--radio);
   background: var(--superficie);
   border: 1px solid var(--borde);
+  /* El navegador salta el pintado de las filas fuera de pantalla en listas largas */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 66px;
   transition: background var(--tiempo) var(--curva), border-color var(--tiempo) var(--curva);
 }
 .pista:active { background: var(--superficie-2); }
@@ -604,6 +680,13 @@ body.esta-sonando .boton-icono--principal::before { animation: pulso 2.4s ease-o
 /* En pantallas muy estrechas los modos siguen disponibles en la pantalla completa */
 @media (max-width: 360px) {
   .mini .boton-icono--modo { display: none; }
+  .cabecera { gap: 8px; padding-left: 12px; padding-right: 12px; }
+  .cabecera__titulo { gap: 8px; }
+  .cabecera__icono { width: 40px; height: 40px; }
+  /* Importar queda como icono para que quepan los dos botones sin cortar el título */
+  #boton-importar { width: 44px; padding: 0; }
+  #boton-importar span { display: none; }
+  .orden { max-width: 110px; font-size: 12px; }
 }
 
 @media (max-height: 680px) {
