@@ -834,6 +834,8 @@ function reproducir(cancion, { reanudar = false } = {}) {
   if (urlAudioActual) urlsAudioPendientes.push(urlAudioActual);
   urlAudioActual = URL.createObjectURL(cancion.blob);
   audio.src = urlAudioActual;
+  // Safari/iOS necesita load() tras cambiar src para encadenar la siguiente pista.
+  audio.load();
   idActual = cancion.id;
   guardarIdActual(idActual);
   const idReproducido = cancion.id;
@@ -885,9 +887,14 @@ function restaurarCancion() {
   if (urlAudioActual) URL.revokeObjectURL(urlAudioActual);
   urlAudioActual = URL.createObjectURL(cancion.blob);
   audio.src = urlAudioActual;
+  audio.load();
   const guardada = Number(posicionesGuardadas[cancion.id]) || 0;
   posicionPendiente = guardada > 1 ? guardada : null;
-  audio.currentTime = 0;
+  try {
+    audio.currentTime = 0;
+  } catch (_) {
+    // Safari puede rechazarlo antes de tener metadata; loadedmetadata lo ajusta.
+  }
   dibujarReproductor();
   actualizarPistaActual();
   actualizarBotonPlay();
@@ -1535,8 +1542,9 @@ audio.addEventListener('error', () => {
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') {
     guardarPosicion({ forzar: true });
-  } else if (audio.ended) {
-    // 'ended' se perdió en segundo plano: se reanuda la cola aquí
+  } else if (audio.ended || (audio.paused && Number.isFinite(audio.duration) &&
+             audio.duration > 0 && audio.currentTime >= audio.duration - 0.5)) {
+    // 'ended' se perdió en segundo plano, o iOS dejó paused sin ended al terminar
     cancelarFinCancion();
     avanzarAlSiguiente();
   } else if (!audio.paused) {
