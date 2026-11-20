@@ -63,8 +63,10 @@ let urlsCaratulas = new Map(); // id de canción -> URL de su carátula en la li
 const urlsAudioPorId = new Map(); // id de canción -> URL del audio (estable mientras viva la canción)
 let caratulasMediaSession = new Map(); // id de canción -> carátula para la pantalla de bloqueo
 let cancionesConError = new Set(); // ids que fallaron al leer: se excluyen de la rotación
+const erroresAudioPorId = new Map(); // id -> fallos de carga en esta sesión ( antes de descartar )
 let idCargando = null; // id del audio cuyo src se está cargando
 let avanzando = false; // evita cadenas de avance por errores transitorios
+let bibliotecaLista = false; // la carga inicial terminó: ya se puede responder a controles remotos
 let temporizadorAviso;
 let temporizadorSalidaAviso;
 let temporizadorFinCancion;
@@ -587,6 +589,7 @@ function crearFila(cancion, indice, animar) {
   botonReproducir.setAttribute('aria-label', `Reproducir ${cancion.titulo}`);
   botonReproducir.addEventListener('click', () => {
     cancionesConError.delete(cancion.id); // un toque explícito reintenta la canción
+    erroresAudioPorId.delete(cancion.id);
     reproducir(cancion, { reanudar: true });
   });
 
@@ -834,10 +837,16 @@ function liberarUrlAudio(id) {
   urlsAudioPorId.delete(id);
 }
 
-// Al cambiar de pista, iOS a veces aborta el play() anterior. Se reintenta una vez.
+// NotAllowedError significa que el navegador no aceptó play() sin gesto del
+// usuario. Reintentarlo fuera del gesto nunca funciona: solo hay que esperar
+// a que la persona toque el botón. AbortError sí es transitorio al cambiar src.
+function esPermisoDenegado(error) {
+  return error?.name === 'NotAllowedError';
+}
+
 function reproducirAudio() {
   return audio.play().catch((error) => {
-    if (error.name !== 'AbortError') throw error;
+    if (esPermisoDenegado(error) || error.name !== 'AbortError') throw error;
     if (audio.readyState >= 2) return audio.play();
     return new Promise((resolver, rechazar) => {
       audio.addEventListener('canplay', () => audio.play().then(resolver, rechazar), { once: true });
@@ -990,10 +999,15 @@ function reproducirAhora(cancion, { reanudar = false } = {}) {
   return reproducirAudio()
     .then(() => {
       cancionesConError.delete(idReproducido);
+      erroresAudioPorId.delete(idReproducido);
       actualizarMediaSession();
       programarFinCancion();
     })
     .catch((error) => {
+      if (esPermisoDenegado(error)) {
+        mostrarAviso('Toca el botón de reproducción para continuar.');
+        return;
+      }
       // El evento 'error' ya avisó si el archivo estaba dañado.
       if (!cancionesConError.has(idReproducido)) {
         mostrarAviso(`No se pudo reproducir: ${error.message}`);
@@ -1038,6 +1052,7 @@ function restaurarCancion() {
 function alternar() {
   if (!idActual) {
     cancionesConError.clear(); // el botón de play reintenta desde cero
+    erroresAudioPorId.clear();
     const cola = colaReproduccion();
     if (cola.length) reproducir(cola[0], { reanudar: true });
     return;
@@ -1047,10 +1062,13 @@ function alternar() {
     reproducirAudio()
       .then(() => {
         cancionesConError.delete(idActual);
+        erroresAudioPorId.delete(idActual);
         actualizarMediaSession();
         programarFinCancion();
       })
-      .catch((error) => mostrarAviso(error.message));
+      .catch((error) => {
+        if (!esPermisoDenegado(error)) mostrarAviso(error.message);
+      });
   } else {
     audio.pause();
   }
@@ -1162,6 +1180,7 @@ async function eliminar(cancion) {
   if (cancion.id === idActual) detener();
   liberarUrlAudio(cancion.id);
   cancionesConError.delete(cancion.id);
+  erroresAudioPorId.delete(cancion.id);
   olvidarPosicion(cancion.id);
   await operarDB('readwrite', (almacen) => almacen.delete(cancion.id));
   await cargarCanciones();
@@ -1272,6 +1291,9 @@ function registrarAccionesRemotas() {
   if (!('mediaSession' in navigator) || !navigator.mediaSession.setActionHandler) return;
   const acciones = {
     play: () => {
+      // iOS puede enviar esta acción mientras la biblioteca aún se está leyendo
+      // tras una recarga. Responder antes de tiempo provoca un play() sin gesto.
+      if (!bibliotecaLista) return;
       configurarSesionDeAudio();
       // Si iOS mató la app, el elemento de audio puede no tener src: hay que
       // reconstruirlo desde IndexedDB antes de intentar reproducir.
@@ -1284,6 +1306,7 @@ function registrarAccionesRemotas() {
       reproducirAudio()
         .then(() => {
           cancionesConError.delete(idActual);
+          erroresAudioPorId.delete(idActual);
           actualizarMediaSession();
           programarFinCancion();
         })
@@ -1473,6 +1496,7 @@ async function eliminarDuplicados() {
     liberarUrlAudio(cancion.id);
     olvidarPosicion(cancion.id);
     cancionesConError.delete(cancion.id);
+    erroresAudioPorId.delete(cancion.id);
   });
   if (borradas.some((cancion) => cancion.id === idActual)) detener();
   await cargarCanciones();
@@ -1501,6 +1525,7 @@ botonDuplicados.addEventListener('click', () => {
 // Un solo toque inicia la biblioteca y encadena las canciones automáticamente
 reproducirTodo.addEventListener('click', () => {
   cancionesConError.clear(); // "Reproducir todo" reintenta también las marcadas
+  erroresAudioPorId.clear();
   const cola = colaReproduccion();
   if (!cola.length) {
     mostrarAviso(cancionesVisibles.length
@@ -1687,6 +1712,19 @@ audio.addEventListener('error', () => {
     avanzarAlSiguiente();
     return;
   }
+  // iOS emite a veces un primer error transitorio justo tras load()/src. Se
+  // reintenta la misma pista una vez y en silencio antes de descartarla, para
+  // no llenar la biblioteca de canciones válidas marcadas como dañadas.
+  const fallos = erroresAudioPorId.get(idConError) || 0;
+  if (fallos === 0) {
+    erroresAudioPorId.set(idConError, 1);
+    const cancion = cancionActual();
+    if (cancion) {
+      reproducir(cancion, { conFundido: false });
+      return;
+    }
+  }
+  erroresAudioPorId.set(idConError, fallos + 1);
   cancionesConError.add(idConError);
   historialAleatorio = [];
   olvidarPosicion(idConError);
@@ -1738,6 +1776,9 @@ async function iniciar() {
   } catch (error) {
     mostrarAviso(`No se pudo abrir la biblioteca local: ${error.message}`);
   }
+  // Solo ahora los controles remotos pueden intentar reproducir.
+  bibliotecaLista = true;
+  erroresAudioPorId.clear();
 
   // En segundo plano: no bloquea el arranque y solo se hace una vez
   repasarCaratulas().catch(() => {});
