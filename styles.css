@@ -562,38 +562,40 @@ body.esta-sonando .boton-icono--principal::before { animation: pulso 2.4s ease-o
 .overlay__textos span { color: var(--secundario); }
 .overlay__textos small { color: var(--secundario); opacity: .75; font-size: 12px; }
 
-.barra-progreso { width: 100%; }
+.barra-progreso { --progreso: 0%; width: 100%; }
 .barra-progreso input[type="range"] {
   -webkit-appearance: none;
   appearance: none;
   width: 100%;
-  height: 30px;
+  height: 44px; /* área táctil cómoda en iPhone */
   margin: 0;
   background: transparent;
   cursor: pointer;
 }
 .barra-progreso input::-webkit-slider-runnable-track {
-  height: 5px;
+  height: 6px;
   border-radius: 3px;
-  background: rgba(255, 255, 255, .16);
+  background: linear-gradient(90deg,
+    var(--acento-2) var(--progreso), rgba(255, 255, 255, .16) var(--progreso));
 }
 .barra-progreso input::-webkit-slider-thumb {
   -webkit-appearance: none;
-  width: 16px;
-  height: 16px;
-  margin-top: -5.5px;
+  width: 20px;
+  height: 20px;
+  margin-top: -7px;
   border-radius: 50%;
   background: var(--acento-2);
   box-shadow: 0 0 0 4px rgba(61, 220, 151, .16);
 }
 .barra-progreso input::-moz-range-track {
-  height: 5px;
+  height: 6px;
   border-radius: 3px;
-  background: rgba(255, 255, 255, .16);
+  background: linear-gradient(90deg,
+    var(--acento-2) var(--progreso), rgba(255, 255, 255, .16) var(--progreso));
 }
 .barra-progreso input::-moz-range-thumb {
-  width: 16px;
-  height: 16px;
+  width: 20px;
+  height: 20px;
   border: 0;
   border-radius: 50%;
   background: var(--acento-2);

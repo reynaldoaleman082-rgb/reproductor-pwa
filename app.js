@@ -59,6 +59,8 @@ let posicionesGuardadas = {};
 let posicionPendiente = null;
 let ultimaGuardaPosicion = 0;
 let ultimaPosicionInformada = 0;
+let arrastrandoProgreso = false;
+let saltoPendiente = null; // segundos a aplicar cuando la canción ya tenga duración
 
 // Preferencias de reproducción (se conservan entre sesiones)
 let modoRepeticion = 'off'; // off | all | one
@@ -551,11 +553,41 @@ function cancionActual() {
   return canciones.find((c) => c.id === idActual) || null;
 }
 
-function actualizarMiniProgreso() {
+function actualizarMiniProgreso(segundos = audio.currentTime) {
   const porcentaje = Number.isFinite(audio.duration) && audio.duration > 0
-    ? (audio.currentTime / audio.duration) * 100
+    ? (segundos / audio.duration) * 100
     : 0;
   miniProgreso.style.width = `${Math.min(100, Math.max(0, porcentaje))}%`;
+}
+
+// Una sola fuente para la barra, los tiempos y el mini reproductor
+function actualizarProgresoVisual(segundos) {
+  const porcentaje = Number.isFinite(audio.duration) && audio.duration > 0
+    ? Math.min(100, Math.max(0, (segundos / audio.duration) * 100))
+    : 0;
+  progreso.value = porcentaje;
+  progreso.style.setProperty('--progreso', `${porcentaje}%`);
+  tiempoActual.textContent = formatoTiempo(segundos);
+  tiempoTotal.textContent = formatoTiempo(audio.duration);
+  actualizarMiniProgreso(segundos);
+}
+
+// Salto a un segundo concreto. Si aún no se conoce la duración, se guarda
+// el destino y se aplica en loadedmetadata (típico al adelantar justo al arrancar).
+function saltarA(segundos, { actualizarBarra = true } = {}) {
+  if (!Number.isFinite(segundos)) return;
+  if (!Number.isFinite(audio.duration) || audio.duration <= 0) {
+    saltoPendiente = Math.max(0, segundos);
+    return;
+  }
+  const destino = Math.min(Math.max(0, segundos), Math.max(0, audio.duration - 0.25));
+  audio.currentTime = destino;
+  saltoPendiente = null;
+  if (actualizarBarra) actualizarProgresoVisual(destino);
+  else tiempoActual.textContent = formatoTiempo(destino);
+  guardarPosicionEn(destino);
+  actualizarPosicion({ forzar: true });
+  programarFinCancion();
 }
 
 function dibujarReproductor() {
@@ -579,7 +611,7 @@ function dibujarReproductor() {
     placeholder.hidden = Boolean(url);
     if (url) imagen.src = url;
   }
-  actualizarMiniProgreso();
+  actualizarProgresoVisual(audio.currentTime);
 }
 
 function actualizarBotonPlay() {
@@ -878,6 +910,8 @@ function actualizarMediaSession() {
   ponerMetadata(cancion, caratulasMediaSession.get(cancion.id));
   navigator.mediaSession.playbackState = audio.paused ? 'paused' : 'playing';
   actualizarPosicion({ forzar: true });
+  // Safari puede descartar los handlers si se registraron antes de haber metadata
+  registrarAccionesRemotas();
 
   if (cancion.caratula && !caratulasMediaSession.has(cancion.id)) {
     convertirCaratula(cancion).then((artwork) => {
@@ -912,14 +946,19 @@ function persistirPosiciones() {
   }
 }
 
+function guardarPosicionEn(segundos) {
+  if (!idActual) return;
+  ultimaGuardaPosicion = Date.now();
+  posicionesGuardadas[idActual] = Math.max(0, segundos);
+  persistirPosiciones();
+}
+
 // Se llama desde timeupdate (limitado a 5 s) y al pausar o salir de la app
 function guardarPosicion({ forzar = false } = {}) {
   if (!idActual || audio.ended || saltandoAlSiguiente || audio.currentTime < 1) return;
   const ahora = Date.now();
   if (!forzar && ahora - ultimaGuardaPosicion < 5000) return;
-  ultimaGuardaPosicion = ahora;
-  posicionesGuardadas[idActual] = audio.currentTime;
-  persistirPosiciones();
+  guardarPosicionEn(audio.currentTime);
 }
 
 function olvidarPosicion(id) {
@@ -943,19 +982,14 @@ function registrarAccionesRemotas() {
     previoustrack: anterior,
     nexttrack: () => cambiarPista(1),
     seekto: (detalles) => {
-      if (typeof detalles.position === 'number') audio.currentTime = detalles.position;
-      actualizarPosicion({ forzar: true });
-      programarFinCancion();
+      if (Number.isFinite(detalles.position)) saltarA(detalles.position);
+      else actualizarPosicion({ forzar: true });
     },
     seekbackward: (detalles) => {
-      audio.currentTime = Math.max(0, audio.currentTime - (detalles.seekOffset || 10));
-      actualizarPosicion({ forzar: true });
-      programarFinCancion();
+      saltarA(audio.currentTime - (Number(detalles.seekOffset) || 10));
     },
     seekforward: (detalles) => {
-      audio.currentTime = Math.min(audio.duration || 0, audio.currentTime + (detalles.seekOffset || 10));
-      actualizarPosicion({ forzar: true });
-      programarFinCancion();
+      saltarA(audio.currentTime + (Number(detalles.seekOffset) || 10));
     }
   };
   for (const [nombre, manejador] of Object.entries(acciones)) {
@@ -1190,22 +1224,42 @@ contenido.addEventListener('scroll', () => {
   $('.cabecera').classList.toggle('is-desplazada', contenido.scrollTop > 4);
 }, { passive: true });
 
+// Mientras se arrastra, timeupdate no debe devolver el pulgar a su sitio
+for (const evento of ['pointerdown', 'touchstart', 'keydown']) {
+  progreso.addEventListener(evento, () => { arrastrandoProgreso = true; }, { passive: true });
+}
+// 'change' llega al soltar; estos dos últimos son solo una red de seguridad
+for (const evento of ['keyup', 'blur']) {
+  progreso.addEventListener(evento, () => { arrastrandoProgreso = false; }, { passive: true });
+}
+
+// Al arrastrar solo se mueve el pulgar; el salto real se aplica al soltar
 progreso.addEventListener('input', () => {
-  if (Number.isFinite(audio.duration) && audio.duration > 0) {
-    audio.currentTime = (Number(progreso.value) / 100) * audio.duration;
-    guardarPosicion({ forzar: true });
-    actualizarPosicion({ forzar: true });
-  }
+  arrastrandoProgreso = true;
+  const segundos = (Number(progreso.value) / 100) * (audio.duration || 0);
+  progreso.style.setProperty('--progreso', `${progreso.value}%`);
+  tiempoActual.textContent = formatoTiempo(segundos);
+  actualizarMiniProgreso(segundos);
 });
-progreso.addEventListener('change', programarFinCancion);
+
+progreso.addEventListener('change', () => {
+  arrastrandoProgreso = false;
+  const segundos = (Number(progreso.value) / 100) * (audio.duration || 0);
+  saltarA(segundos, { actualizarBarra: false });
+});
 
 audio.addEventListener('timeupdate', () => {
-  tiempoActual.textContent = formatoTiempo(audio.currentTime);
-  tiempoTotal.textContent = formatoTiempo(audio.duration);
-  progreso.value = audio.duration ? (audio.currentTime / audio.duration) * 100 : 0;
-  actualizarMiniProgreso();
+  if (!arrastrandoProgreso) actualizarProgresoVisual(audio.currentTime);
   guardarPosicion();
   actualizarPosicion();
+});
+
+// Un seek puede tardar unos milisegundos: se refleja cuando el navegador lo aplica
+audio.addEventListener('seeked', () => {
+  if (!arrastrandoProgreso) actualizarProgresoVisual(audio.currentTime);
+  guardarPosicion({ forzar: true });
+  actualizarPosicion({ forzar: true });
+  programarFinCancion();
 });
 
 audio.addEventListener('loadedmetadata', () => {
@@ -1214,10 +1268,12 @@ audio.addEventListener('loadedmetadata', () => {
     if (destino > 0) audio.currentTime = destino;
     posicionPendiente = null;
   }
-  tiempoActual.textContent = formatoTiempo(audio.currentTime);
-  tiempoTotal.textContent = formatoTiempo(audio.duration);
-  progreso.value = audio.duration ? (audio.currentTime / audio.duration) * 100 : 0;
-  actualizarMiniProgreso();
+  if (saltoPendiente !== null) {
+    const destino = Math.min(saltoPendiente, Math.max(0, (audio.duration || 0) - 0.25));
+    if (destino > 0) audio.currentTime = destino;
+    saltoPendiente = null;
+  }
+  actualizarProgresoVisual(audio.currentTime);
   actualizarPosicion({ forzar: true });
 
   const cancion = cancionActual();
@@ -1227,6 +1283,14 @@ audio.addEventListener('loadedmetadata', () => {
     if (fila) actualizarFila(cancion, fila);
     operarDB('readwrite', (almacen) => almacen.put(cancion)).catch(() => {});
   }
+  programarFinCancion();
+});
+
+// Safari a veces conoce la duración tarde: se actualiza el deslizador de bloqueo
+audio.addEventListener('durationchange', () => {
+  tiempoTotal.textContent = formatoTiempo(audio.duration);
+  actualizarProgresoVisual(audio.currentTime);
+  actualizarPosicion({ forzar: true });
   programarFinCancion();
 });
 
