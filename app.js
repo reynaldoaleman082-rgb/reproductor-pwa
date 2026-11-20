@@ -246,6 +246,40 @@ async function cargarCanciones() {
   }
 }
 
+// Las canciones importadas antes de esta corrección no guardaron la carátula:
+// el frame APIC no cabía en los primeros 256 KB. Se recupera una sola vez.
+async function repasarCaratulas() {
+  const pendientes = canciones.filter((c) => !c.caratula && !c.caratulaBuscada);
+  if (!pendientes.length) return;
+
+  for (const cancion of pendientes) {
+    let caratula = null;
+    let lado = null;
+    try {
+      const meta = await leerMetadatos(cancion.blob);
+      const reducida = await reducirCaratula(meta.caratula);
+      caratula = reducida.blob;
+      lado = reducida.lado;
+    } catch (_) {
+      // Archivo ilegible: se marca igual para no reintentarlo en cada arranque.
+    }
+    cancion.caratula = caratula;
+    cancion.caratulaLado = lado;
+    cancion.caratulaBuscada = true;
+    try {
+      await operarDB('readwrite', (almacen) => almacen.put(cancion));
+    } catch (_) {
+      // Si no se puede guardar, al menos se muestra durante esta sesión.
+    }
+    filasPista.get(cancion.id)?.remove();
+    filasPista.delete(cancion.id);
+  }
+
+  await cargarCanciones();
+  if (idActual) actualizarMediaSession();
+  mostrarAviso('Carátulas actualizadas.');
+}
+
 // ---------------------------------------------------------------------------
 // Lectura de metadatos ID3 (MP3). En otros formatos se usa el nombre de archivo.
 // ---------------------------------------------------------------------------
@@ -298,7 +332,13 @@ function leerCaratula(bytes, inicio, fin) {
 }
 
 function leerID3(buffer) {
-  const resultado = { titulo: null, artista: null, album: null, caratula: null };
+  const resultado = {
+    titulo: null,
+    artista: null,
+    album: null,
+    caratula: null,
+    caratulaRango: null
+  };
   if (buffer.byteLength < 10) return resultado;
 
   const vista = new DataView(buffer);
@@ -328,7 +368,15 @@ function leerID3(buffer) {
     if (tamañoFrame <= 0) break;
     const inicioDatos = offset + cabecera;
     const finDatos = inicioDatos + tamañoFrame;
-    if (finDatos > fin) break;
+
+    if (finDatos > fin) {
+      // La carátula suele pesar casi 1 MB y no cabe en el trozo leído. Se
+      // guarda su rango para leer después solo esos bytes directamente del archivo.
+      if ((id === 'APIC' || id === 'PIC') && !resultado.caratula && !resultado.caratulaRango) {
+        resultado.caratulaRango = { inicio: inicioDatos, fin: finDatos };
+      }
+      break;
+    }
 
     const textos = version === 2
       ? { TT2: 'titulo', TP1: 'artista', TAL: 'album' }
@@ -346,6 +394,20 @@ function leerID3(buffer) {
   }
 
   return resultado;
+}
+
+// Lee la cabecera y, si la carátula venía truncada, vuelve al archivo solo por
+// el rango del frame APIC. Así se obtiene la misma imagen que muestra Archivos.
+async function leerMetadatos(archivo) {
+  const cabecera = await archivo.slice(0, 256 * 1024).arrayBuffer();
+  const meta = leerID3(cabecera);
+  if (meta.caratulaRango) {
+    const bytes = await archivo.slice(
+      meta.caratulaRango.inicio, meta.caratulaRango.fin
+    ).arrayBuffer();
+    meta.caratula = leerCaratula(new Uint8Array(bytes), 0, bytes.byteLength);
+  }
+  return meta;
 }
 
 function nombreLimpio(nombre) {
@@ -390,8 +452,7 @@ async function reducirCaratula(blob) {
 }
 
 async function prepararCancion(archivo) {
-  const cabecera = await archivo.slice(0, 256 * 1024).arrayBuffer();
-  const meta = leerID3(cabecera);
+  const meta = await leerMetadatos(archivo);
   const caratula = await reducirCaratula(meta.caratula);
   return {
     id: idNuevo(),
@@ -403,6 +464,7 @@ async function prepararCancion(archivo) {
     album: meta.album || 'Álbum desconocido',
     caratula: caratula.blob,
     caratulaLado: caratula.lado,
+    caratulaBuscada: true,
     duracion: 0,
     fecha: Date.now()
   };
@@ -1497,6 +1559,9 @@ async function iniciar() {
   } catch (error) {
     mostrarAviso(`No se pudo abrir la biblioteca local: ${error.message}`);
   }
+
+  // En segundo plano: no bloquea el arranque y solo se hace una vez
+  repasarCaratulas().catch(() => {});
 
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
