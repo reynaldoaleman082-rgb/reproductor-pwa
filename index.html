@@ -94,20 +94,26 @@
 
     <main class="contenido">
       <section id="herramientas" class="herramientas" hidden aria-label="Herramientas de la biblioteca">
-        <label class="buscador">
-          <svg class="icono icono--sm" aria-hidden="true"><use href="#i-buscar"></use></svg>
-          <input id="busqueda" type="search" inputmode="search" autocomplete="off"
-                 placeholder="Buscar canción o artista" aria-label="Buscar canción o artista">
-          <button id="limpiar-busqueda" class="buscador__limpiar" type="button" aria-label="Borrar búsqueda" hidden>
-            <svg class="icono icono--sm" aria-hidden="true"><use href="#i-x"></use></svg>
-          </button>
-        </label>
-        <select id="orden" class="orden" aria-label="Ordenar biblioteca">
-          <option value="fecha">Más recientes</option>
-          <option value="titulo">Por título</option>
-          <option value="artista">Por artista</option>
-          <option value="duracion">Por duración</option>
-        </select>
+        <button id="reproducir-todo" class="boton boton--primario reproducir-todo" type="button">
+          <svg class="icono icono--sm" aria-hidden="true"><use href="#i-play"></use></svg>
+          <span>Reproducir todo</span>
+        </button>
+        <div class="herramientas__filtros">
+          <label class="buscador">
+            <svg class="icono icono--sm" aria-hidden="true"><use href="#i-buscar"></use></svg>
+            <input id="busqueda" type="search" inputmode="search" autocomplete="off"
+                   placeholder="Buscar canción o artista" aria-label="Buscar canción o artista">
+            <button id="limpiar-busqueda" class="buscador__limpiar" type="button" aria-label="Borrar búsqueda" hidden>
+              <svg class="icono icono--sm" aria-hidden="true"><use href="#i-x"></use></svg>
+            </button>
+          </label>
+          <select id="orden" class="orden" aria-label="Ordenar biblioteca">
+            <option value="fecha">Más recientes</option>
+            <option value="titulo">Por título</option>
+            <option value="artista">Por artista</option>
+            <option value="duracion">Por duración</option>
+          </select>
+        </div>
       </section>
 
       <section id="vacio" class="vacio" hidden>
@@ -220,7 +226,7 @@
   <div id="aviso" class="aviso" role="status" aria-live="polite" hidden></div>
 
   <input id="entrada-archivos" type="file" accept="audio/*,.mp3,.m4a,.aac,.wav,.ogg,.flac,.aiff,.aif" multiple hidden>
-  <audio id="audio" preload="metadata"></audio>
+  <audio id="audio" preload="auto"></audio>
 
   <script src="./app.js" type="module"></script>
 </body>

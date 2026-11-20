@@ -23,6 +23,7 @@ const limpiarBusqueda = $('#limpiar-busqueda');
 const orden = $('#orden');
 const sinResultados = $('#sin-resultados');
 const botonDuplicados = $('#boton-duplicados');
+const reproducirTodo = $('#reproducir-todo');
 
 const DB_NAME = 'reproductor-offline';
 const STORE = 'tracks';
@@ -45,8 +46,12 @@ let idPistaResaltada = null;
 let urlAudioActual = null;
 let urlCaratulaActual = null;
 let urlsCaratulas = new Map(); // id de canción -> URL de su carátula en la lista
+let urlsAudioPendientes = []; // blobs del audio anterior, pendientes de liberar
+let caratulasMediaSession = new Map(); // id de canción -> carátula para la pantalla de bloqueo
 let temporizadorAviso;
 let temporizadorSalidaAviso;
+let temporizadorFinCancion;
+let saltandoAlSiguiente = false;
 
 let textoBusqueda = '';
 let ordenActual = 'fecha';
@@ -643,11 +648,49 @@ function configurarSesionDeAudio() {
   }
 }
 
+// Revocar el blob anterior antes de cambiar de src puede cortar el audio en iOS.
+// Se liberan cuando el nuevo archivo ya está sonando (o si el play falla).
+function liberarUrlsAudioPendientes() {
+  urlsAudioPendientes.forEach((url) => URL.revokeObjectURL(url));
+  urlsAudioPendientes = [];
+}
+
+// Al cambiar de pista, iOS a veces aborta el play() anterior. Se reintenta una vez.
+function reproducirAudio() {
+  return audio.play().catch((error) => {
+    if (error.name !== 'AbortError') throw error;
+    if (audio.readyState >= 2) return audio.play();
+    return new Promise((resolver, rechazar) => {
+      audio.addEventListener('canplay', () => audio.play().then(resolver, rechazar), { once: true });
+    });
+  });
+}
+
+// Respaldo por si el evento 'ended' no llega con la app en segundo plano.
+function programarFinCancion() {
+  clearTimeout(temporizadorFinCancion);
+  if (!Number.isFinite(audio.duration) || audio.duration <= 0) return;
+  const restante = Math.max(0, audio.duration - audio.currentTime);
+  temporizadorFinCancion = setTimeout(() => {
+    if (!audio.paused && !audio.ended && audio.currentTime >= audio.duration - 1.5) {
+      if (idActual) olvidarPosicion(idActual);
+      saltandoAlSiguiente = true;
+      cambiarPista(1, true);
+      saltandoAlSiguiente = false;
+    }
+  }, (restante + 1.5) * 1000);
+}
+
+function cancelarFinCancion() {
+  clearTimeout(temporizadorFinCancion);
+}
+
 function reproducir(cancion, { reanudar = false } = {}) {
   if (!cancion) return;
   guardarPosicion({ forzar: true }); // recuerda dónde iba la canción anterior
+  cancelarFinCancion();
   configurarSesionDeAudio();
-  if (urlAudioActual) URL.revokeObjectURL(urlAudioActual);
+  if (urlAudioActual) urlsAudioPendientes.push(urlAudioActual);
   urlAudioActual = URL.createObjectURL(cancion.blob);
   audio.src = urlAudioActual;
   idActual = cancion.id;
@@ -659,9 +702,18 @@ function reproducir(cancion, { reanudar = false } = {}) {
   dibujarReproductor();
   animarCambioDePortada();
   actualizarBotonPlay();
-  audio.play()
-    .then(() => actualizarMediaSession())
-    .catch((error) => mostrarAviso(`No se pudo reproducir: ${error.message}`));
+  // Metadata antes de play(): la pantalla de bloqueo no debe mostrar la canción anterior
+  actualizarMediaSession();
+  reproducirAudio()
+    .then(() => {
+      liberarUrlsAudioPendientes();
+      actualizarMediaSession();
+      programarFinCancion();
+    })
+    .catch((error) => {
+      liberarUrlsAudioPendientes();
+      mostrarAviso(`No se pudo reproducir: ${error.message}`);
+    });
 }
 
 function alternar() {
@@ -671,7 +723,13 @@ function alternar() {
   }
   if (audio.paused) {
     configurarSesionDeAudio();
-    audio.play().then(actualizarMediaSession).catch((error) => mostrarAviso(error.message));
+    reproducirAudio()
+      .then(() => {
+        liberarUrlsAudioPendientes();
+        actualizarMediaSession();
+        programarFinCancion();
+      })
+      .catch((error) => mostrarAviso(error.message));
   } else {
     audio.pause();
   }
@@ -754,10 +812,12 @@ function anterior() {
 }
 
 function detener() {
+  cancelarFinCancion();
   audio.pause();
   audio.removeAttribute('src');
   audio.load();
   if (urlAudioActual) URL.revokeObjectURL(urlAudioActual);
+  liberarUrlsAudioPendientes();
   urlAudioActual = null;
   idActual = null;
   historialAleatorio = [];
@@ -782,31 +842,48 @@ async function eliminar(cancion) {
 
 async function convertirCaratula(cancion) {
   if (!cancion?.caratula) return [];
+  if (caratulasMediaSession.has(cancion.id)) return caratulasMediaSession.get(cancion.id);
   return new Promise((resolver) => {
     const lector = new FileReader();
-    lector.onload = () => resolver([{
-      src: lector.result,
-      sizes: '512x512',
-      type: cancion.caratula.type || 'image/jpeg'
-    }]);
+    lector.onload = () => {
+      const artwork = [{
+        src: lector.result,
+        sizes: '512x512',
+        type: cancion.caratula.type || 'image/jpeg'
+      }];
+      caratulasMediaSession.set(cancion.id, artwork);
+      resolver(artwork);
+    };
     lector.onerror = () => resolver([]);
     lector.readAsDataURL(cancion.caratula);
   });
 }
 
-async function actualizarMediaSession() {
-  if (!('mediaSession' in navigator) || !('MediaMetadata' in window)) return;
-  const cancion = cancionActual();
-  if (!cancion) return;
-  const artwork = await convertirCaratula(cancion);
+function ponerMetadata(cancion, artwork) {
+  if (!('mediaSession' in navigator) || !('MediaMetadata' in window) || !cancion) return;
   navigator.mediaSession.metadata = new MediaMetadata({
     title: cancion.titulo,
     artist: cancion.artista,
     album: cancion.album,
-    artwork
+    artwork: artwork || []
   });
+}
+
+// Síncrono: pone título y artista al instante. La carátula se añade después,
+// pero se lee del caché en los cambios de canción posteriores.
+function actualizarMediaSession() {
+  if (!('mediaSession' in navigator)) return;
+  const cancion = cancionActual();
+  if (!cancion) return;
+  ponerMetadata(cancion, caratulasMediaSession.get(cancion.id));
   navigator.mediaSession.playbackState = audio.paused ? 'paused' : 'playing';
   actualizarPosicion({ forzar: true });
+
+  if (cancion.caratula && !caratulasMediaSession.has(cancion.id)) {
+    convertirCaratula(cancion).then((artwork) => {
+      if (idActual === cancion.id) ponerMetadata(cancionActual(), artwork);
+    });
+  }
 }
 
 function actualizarPosicion({ forzar = false } = {}) {
@@ -837,7 +914,7 @@ function persistirPosiciones() {
 
 // Se llama desde timeupdate (limitado a 5 s) y al pausar o salir de la app
 function guardarPosicion({ forzar = false } = {}) {
-  if (!idActual || audio.ended || audio.currentTime < 1) return;
+  if (!idActual || audio.ended || saltandoAlSiguiente || audio.currentTime < 1) return;
   const ahora = Date.now();
   if (!forzar && ahora - ultimaGuardaPosicion < 5000) return;
   ultimaGuardaPosicion = ahora;
@@ -855,7 +932,12 @@ function registrarAccionesRemotas() {
   const acciones = {
     play: () => {
       configurarSesionDeAudio();
-      audio.play().then(actualizarMediaSession).catch(() => {});
+      reproducirAudio()
+        .then(() => {
+          actualizarMediaSession();
+          programarFinCancion();
+        })
+        .catch(() => {});
     },
     pause: () => audio.pause(),
     previoustrack: anterior,
@@ -863,14 +945,17 @@ function registrarAccionesRemotas() {
     seekto: (detalles) => {
       if (typeof detalles.position === 'number') audio.currentTime = detalles.position;
       actualizarPosicion({ forzar: true });
+      programarFinCancion();
     },
     seekbackward: (detalles) => {
       audio.currentTime = Math.max(0, audio.currentTime - (detalles.seekOffset || 10));
       actualizarPosicion({ forzar: true });
+      programarFinCancion();
     },
     seekforward: (detalles) => {
       audio.currentTime = Math.min(audio.duration || 0, audio.currentTime + (detalles.seekOffset || 10));
       actualizarPosicion({ forzar: true });
+      programarFinCancion();
     }
   };
   for (const [nombre, manejador] of Object.entries(acciones)) {
@@ -1051,6 +1136,16 @@ botonDuplicados.addEventListener('click', () => {
     .catch((error) => mostrarAviso(`No se pudieron borrar los duplicados: ${error.message}`));
 });
 
+// Un solo toque inicia la biblioteca y encadena las canciones automáticamente
+reproducirTodo.addEventListener('click', () => {
+  if (!cancionesVisibles.length) {
+    mostrarAviso('Primero importa alguna canción.');
+    return;
+  }
+  configurarSesionDeAudio();
+  reproducir(cancionesVisibles[0], { reanudar: true });
+});
+
 busqueda.addEventListener('input', () => {
   textoBusqueda = busqueda.value;
   limpiarBusqueda.hidden = !textoBusqueda;
@@ -1102,6 +1197,7 @@ progreso.addEventListener('input', () => {
     actualizarPosicion({ forzar: true });
   }
 });
+progreso.addEventListener('change', programarFinCancion);
 
 audio.addEventListener('timeupdate', () => {
   tiempoActual.textContent = formatoTiempo(audio.currentTime);
@@ -1131,15 +1227,19 @@ audio.addEventListener('loadedmetadata', () => {
     if (fila) actualizarFila(cancion, fila);
     operarDB('readwrite', (almacen) => almacen.put(cancion)).catch(() => {});
   }
+  programarFinCancion();
 });
 
 audio.addEventListener('play', () => {
+  configurarSesionDeAudio();
   actualizarBotonPlay();
   if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
   actualizarPosicion({ forzar: true });
+  programarFinCancion();
 });
 
 audio.addEventListener('pause', () => {
+  cancelarFinCancion();
   actualizarBotonPlay();
   if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
   guardarPosicion({ forzar: true });
@@ -1147,14 +1247,28 @@ audio.addEventListener('pause', () => {
 });
 
 audio.addEventListener('ended', () => {
+  cancelarFinCancion();
   if (idActual) olvidarPosicion(idActual);
   posicionPendiente = null;
   cambiarPista(1, true);
 });
 
+// Un archivo dañado no debe dejar la cola detenida: se salta al siguiente
+audio.addEventListener('error', () => {
+  if (!idActual) return;
+  cancelarFinCancion();
+  olvidarPosicion(idActual);
+  mostrarAviso('No se pudo leer este archivo; se pasa al siguiente.');
+  cambiarPista(1, true);
+});
+
 // iOS puede suspender la app sin avisar: se guarda el punto de escucha al salir
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'hidden') guardarPosicion({ forzar: true });
+  if (document.visibilityState === 'hidden') {
+    guardarPosicion({ forzar: true });
+  } else if (!audio.paused) {
+    programarFinCancion();
+  }
 });
 window.addEventListener('pagehide', () => guardarPosicion({ forzar: true }));
 
