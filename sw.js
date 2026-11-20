@@ -1,7 +1,7 @@
 /* Service worker: solo cachea la "cáscara" de la app (HTML/CSS/JS/iconos).
    El audio NO pasa por aquí: vive en IndexedDB dentro del teléfono. */
 
-const VERSION = 'shell-v3';
+const VERSION = 'shell-v4';
 const SHELL = [
   './',
   './index.html',

@@ -15,6 +15,8 @@ const miniProgreso = $('#mini-progreso');
 const tiempoActual = $('#tiempo-actual');
 const tiempoTotal = $('#tiempo-total');
 const estadoAlmacenamiento = $('#estado-almacenamiento');
+const contenido = $('.contenido');
+const portada = $('.portada');
 
 const DB_NAME = 'reproductor-offline';
 const STORE = 'tracks';
@@ -31,6 +33,7 @@ let urlAudioActual = null;
 let urlCaratulaActual = null;
 let urlsCaratulas = [];
 let temporizadorAviso;
+let temporizadorSalidaAviso;
 
 // Preferencias de reproducción (se conservan entre sesiones)
 let modoRepeticion = 'off'; // off | all | one
@@ -149,7 +152,7 @@ async function operarDB(modo, accion) {
 async function cargarCanciones() {
   canciones = (await operarDB('readonly', (almacen) => almacen.getAll())) || [];
   canciones.sort((a, b) => b.fecha - a.fecha);
-  dibujarBiblioteca();
+  dibujarBiblioteca({ animar: true });
   dibujarReproductor();
   await mostrarEspacio();
   if (idActual && !canciones.some((c) => c.id === idActual)) {
@@ -328,30 +331,43 @@ function crearElemento(etiqueta, clase, texto) {
   return elemento;
 }
 
-function dibujarBiblioteca() {
+function dibujarBiblioteca({ animar = false } = {}) {
   liberarCaratulas();
   lista.replaceChildren();
   vistaVacia.hidden = canciones.length > 0;
   lista.hidden = canciones.length === 0;
 
-  for (const cancion of canciones) {
+  canciones.forEach((cancion, indice) => {
     const item = crearElemento('li', `pista${cancion.id === idActual ? ' is-actual' : ''}`);
+    if (animar) {
+      item.classList.add('pista--entrando');
+      item.style.setProperty('--retraso', `${Math.min(indice, 12) * 35}ms`);
+    }
 
     const botonReproducir = crearElemento('button', 'pista__boton');
     botonReproducir.type = 'button';
     botonReproducir.setAttribute('aria-label', `Reproducir ${cancion.titulo}`);
 
+    const arte = crearElemento('span', 'pista__arte');
     const url = urlCaratulaLista(cancion);
     if (url) {
       const imagen = crearElemento('img', 'pista__caratula');
       imagen.src = url;
       imagen.alt = '';
-      botonReproducir.append(imagen);
+      arte.append(imagen);
     } else {
       const hueco = crearElemento('span', 'pista__caratula-vacia');
       hueco.append(crearIcono('musica'));
-      botonReproducir.append(hueco);
+      arte.append(hueco);
     }
+
+    // El ecualizador solo se crea en la pista en curso
+    if (cancion.id === idActual) {
+      const ecualizador = crearElemento('span', 'pista__ecualizador');
+      ecualizador.append(crearElemento('i'), crearElemento('i'), crearElemento('i'));
+      arte.append(ecualizador);
+    }
+    botonReproducir.append(arte);
 
     const textos = crearElemento('span', 'pista__textos');
     textos.append(
@@ -373,7 +389,7 @@ function dibujarBiblioteca() {
       borrar
     );
     lista.append(item);
-  }
+  });
 }
 
 function cancionActual() {
@@ -413,6 +429,7 @@ function dibujarReproductor() {
 
 function actualizarBotonPlay() {
   const nombreIcono = audio.paused ? 'play' : 'pausa';
+  document.body.classList.toggle('esta-sonando', !audio.paused);
   for (const selector of ['#boton-play', '#gran-play']) {
     const boton = $(selector);
     const clase = selector === '#boton-play' ? 'icono--sm' : '';
@@ -421,11 +438,22 @@ function actualizarBotonPlay() {
   }
 }
 
+function ocultarAviso() {
+  if (aviso.hidden || aviso.classList.contains('is-saliendo')) return;
+  aviso.classList.add('is-saliendo');
+  temporizadorSalidaAviso = setTimeout(() => {
+    aviso.hidden = true;
+    aviso.classList.remove('is-saliendo');
+  }, 220);
+}
+
 function mostrarAviso(texto) {
+  aviso.classList.remove('is-saliendo');
   aviso.textContent = texto;
   aviso.hidden = false;
   clearTimeout(temporizadorAviso);
-  temporizadorAviso = setTimeout(() => { aviso.hidden = true; }, 4200);
+  clearTimeout(temporizadorSalidaAviso);
+  temporizadorAviso = setTimeout(ocultarAviso, 4200);
 }
 
 async function mostrarEspacio() {
@@ -475,6 +503,7 @@ function reproducir(cancion) {
   actualizarMiniProgreso();
   dibujarBiblioteca();
   dibujarReproductor();
+  animarCambioDePortada();
   actualizarBotonPlay();
   audio.play()
     .then(actualizarMediaSession)
@@ -668,6 +697,40 @@ function registrarAccionesRemotas() {
 }
 
 // ---------------------------------------------------------------------------
+// Animaciones de la interfaz
+// ---------------------------------------------------------------------------
+
+function animarCambioDePortada() {
+  portada.classList.remove('cambio');
+  void portada.offsetWidth; // fuerza un repintado para reiniciar la animación
+  portada.classList.add('cambio');
+}
+
+function abrirPantalla() {
+  pantalla.classList.remove('is-saliendo');
+  pantalla.hidden = false;
+}
+
+function cerrarPantalla() {
+  if (pantalla.hidden || pantalla.classList.contains('is-saliendo')) return;
+  pantalla.classList.add('is-saliendo');
+
+  const terminar = () => {
+    pantalla.hidden = true;
+    pantalla.classList.remove('is-saliendo');
+  };
+  pantalla.addEventListener('animationend', function alTerminar(evento) {
+    if (evento.animationName !== 'overlay-salir') return;
+    pantalla.removeEventListener('animationend', alTerminar);
+    terminar();
+  });
+  // Si el navegador no dispara animationend, la pantalla acaba cerrándose igual
+  setTimeout(() => {
+    if (pantalla.classList.contains('is-saliendo')) terminar();
+  }, 360);
+}
+
+// ---------------------------------------------------------------------------
 // Eventos
 // ---------------------------------------------------------------------------
 
@@ -718,8 +781,12 @@ for (const selector of ['#mini-repeticion', '#gran-repeticion']) {
   $(selector).addEventListener('click', alternarRepeticion);
 }
 
-$('#abrir-pantalla').addEventListener('click', () => { pantalla.hidden = false; });
-$('#cerrar-pantalla').addEventListener('click', () => { pantalla.hidden = true; });
+$('#abrir-pantalla').addEventListener('click', abrirPantalla);
+$('#cerrar-pantalla').addEventListener('click', cerrarPantalla);
+
+contenido.addEventListener('scroll', () => {
+  $('.cabecera').classList.toggle('is-desplazada', contenido.scrollTop > 4);
+}, { passive: true });
 
 progreso.addEventListener('input', () => {
   if (Number.isFinite(audio.duration) && audio.duration > 0) {
