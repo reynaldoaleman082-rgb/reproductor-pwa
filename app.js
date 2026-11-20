@@ -11,12 +11,16 @@ const reproductor = $('#reproductor');
 const pantalla = $('#pantalla-completa');
 const aviso = $('#aviso');
 const progreso = $('#progreso');
+const miniProgreso = $('#mini-progreso');
 const tiempoActual = $('#tiempo-actual');
 const tiempoTotal = $('#tiempo-total');
 const estadoAlmacenamiento = $('#estado-almacenamiento');
 
 const DB_NAME = 'reproductor-offline';
 const STORE = 'tracks';
+const CLAVE_PREFERENCIAS = 'reproductor-preferencias';
+const MODOS_REPETICION = ['off', 'all', 'one'];
+const ETIQUETAS_REPETICION = { off: 'desactivada', all: 'todas', one: 'una canción' };
 
 const EXTENSIONES = ['mp3', 'm4a', 'aac', 'wav', 'ogg', 'oga', 'flac', 'aiff', 'aif', 'caf', 'opus'];
 
@@ -24,8 +28,93 @@ let baseDatos;
 let canciones = [];
 let idActual = null;
 let urlAudioActual = null;
+let urlCaratulaActual = null;
 let urlsCaratulas = [];
 let temporizadorAviso;
+
+// Preferencias de reproducción (se conservan entre sesiones)
+let modoRepeticion = 'off'; // off | all | one
+let aleatorio = false;
+let historialAleatorio = [];
+
+// ---------------------------------------------------------------------------
+// Iconos SVG (misma familia en toda la interfaz, sin emojis)
+// ---------------------------------------------------------------------------
+
+function crearIcono(nombre, claseExtra = '') {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('class', `icono${claseExtra ? ` ${claseExtra}` : ''}`);
+  svg.setAttribute('aria-hidden', 'true');
+  const uso = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+  uso.setAttribute('href', `#i-${nombre}`);
+  svg.append(uso);
+  return svg;
+}
+
+function cargarPreferencias() {
+  try {
+    const datos = JSON.parse(localStorage.getItem(CLAVE_PREFERENCIAS) || '{}');
+    if (MODOS_REPETICION.includes(datos.modoRepeticion)) {
+      modoRepeticion = datos.modoRepeticion;
+    }
+    aleatorio = Boolean(datos.aleatorio);
+  } catch (_) {
+    // Preferencias corruptas: se usan los valores por defecto.
+  }
+}
+
+function guardarPreferencias() {
+  try {
+    localStorage.setItem(CLAVE_PREFERENCIAS, JSON.stringify({
+      modoRepeticion,
+      aleatorio
+    }));
+  } catch (_) {
+    // Almacenamiento no disponible: los botones siguen funcionando en esta sesión.
+  }
+}
+
+function actualizarBotonesModos() {
+  for (const boton of document.querySelectorAll('[data-modo]')) {
+    const esAleatorio = boton.dataset.modo === 'aleatorio';
+    const activo = esAleatorio ? aleatorio : modoRepeticion !== 'off';
+
+    boton.classList.toggle('is-activo', activo);
+    boton.setAttribute('aria-pressed', String(activo));
+
+    if (esAleatorio) {
+      boton.setAttribute('aria-label', `Aleatorio: ${aleatorio ? 'activado' : 'desactivado'}`);
+    } else {
+      boton.setAttribute('aria-label', `Repetición: ${ETIQUETAS_REPETICION[modoRepeticion]}`);
+      boton.querySelector('use').setAttribute(
+        'href',
+        modoRepeticion === 'one' ? '#i-repetir-uno' : '#i-repetir'
+      );
+    }
+  }
+}
+
+function alternarRepeticion() {
+  modoRepeticion = MODOS_REPETICION[
+    (MODOS_REPETICION.indexOf(modoRepeticion) + 1) % MODOS_REPETICION.length
+  ];
+  guardarPreferencias();
+  actualizarBotonesModos();
+  const avisos = {
+    off: 'Repetición desactivada',
+    all: 'Repetir todas las canciones',
+    one: 'Repetir esta canción'
+  };
+  mostrarAviso(avisos[modoRepeticion]);
+}
+
+function alternarAleatorio() {
+  aleatorio = !aleatorio;
+  historialAleatorio = [];
+  guardarPreferencias();
+  actualizarBotonesModos();
+  mostrarAviso(aleatorio ? 'Aleatorio activado' : 'Aleatorio desactivado');
+}
 
 // ---------------------------------------------------------------------------
 // Base de datos local
@@ -216,10 +305,19 @@ function liberarCaratulas() {
   urlsCaratulas = [];
 }
 
-function urlCaratula(cancion) {
+function liberarCaratulaActual() {
+  if (urlCaratulaActual) URL.revokeObjectURL(urlCaratulaActual);
+  urlCaratulaActual = null;
+}
+
+function crearUrlCaratula(cancion) {
   if (!cancion?.caratula) return null;
-  const url = URL.createObjectURL(cancion.caratula);
-  urlsCaratulas.push(url);
+  return URL.createObjectURL(cancion.caratula);
+}
+
+function urlCaratulaLista(cancion) {
+  const url = crearUrlCaratula(cancion);
+  if (url) urlsCaratulas.push(url);
   return url;
 }
 
@@ -243,14 +341,16 @@ function dibujarBiblioteca() {
     botonReproducir.type = 'button';
     botonReproducir.setAttribute('aria-label', `Reproducir ${cancion.titulo}`);
 
-    const url = urlCaratula(cancion);
+    const url = urlCaratulaLista(cancion);
     if (url) {
       const imagen = crearElemento('img', 'pista__caratula');
       imagen.src = url;
       imagen.alt = '';
       botonReproducir.append(imagen);
     } else {
-      botonReproducir.append(crearElemento('span', 'pista__caratula-vacia', '♪'));
+      const hueco = crearElemento('span', 'pista__caratula-vacia');
+      hueco.append(crearIcono('musica'));
+      botonReproducir.append(hueco);
     }
 
     const textos = crearElemento('span', 'pista__textos');
@@ -261,12 +361,17 @@ function dibujarBiblioteca() {
     botonReproducir.append(textos);
     botonReproducir.addEventListener('click', () => reproducir(cancion));
 
-    const borrar = crearElemento('button', 'pista__borrar', '✕');
+    const borrar = crearElemento('button', 'pista__borrar');
     borrar.type = 'button';
     borrar.setAttribute('aria-label', `Eliminar ${cancion.titulo}`);
+    borrar.append(crearIcono('x'));
     borrar.addEventListener('click', () => eliminar(cancion));
 
-    item.append(botonReproducir, crearElemento('span', 'pista__duracion', formatoTiempo(cancion.duracion || 0)), borrar);
+    item.append(
+      botonReproducir,
+      crearElemento('span', 'pista__duracion', formatoTiempo(cancion.duracion || 0)),
+      borrar
+    );
     lista.append(item);
   }
 }
@@ -275,7 +380,15 @@ function cancionActual() {
   return canciones.find((c) => c.id === idActual) || null;
 }
 
+function actualizarMiniProgreso() {
+  const porcentaje = Number.isFinite(audio.duration) && audio.duration > 0
+    ? (audio.currentTime / audio.duration) * 100
+    : 0;
+  miniProgreso.style.width = `${Math.min(100, Math.max(0, porcentaje))}%`;
+}
+
 function dibujarReproductor() {
+  liberarCaratulaActual();
   const cancion = cancionActual();
   reproductor.hidden = !cancion;
   if (!cancion) return;
@@ -286,13 +399,25 @@ function dibujarReproductor() {
   $('#gran-artista').textContent = cancion.artista;
   $('#gran-album').textContent = cancion.album;
 
-  const url = urlCaratula(cancion);
+  const url = crearUrlCaratula(cancion);
+  urlCaratulaActual = url;
   for (const selector of ['#mini-caratula', '#gran-caratula']) {
     const imagen = $(selector);
     const placeholder = $(`${selector}-vacia`);
     imagen.hidden = !url;
     placeholder.hidden = Boolean(url);
     if (url) imagen.src = url;
+  }
+  actualizarMiniProgreso();
+}
+
+function actualizarBotonPlay() {
+  const nombreIcono = audio.paused ? 'play' : 'pausa';
+  for (const selector of ['#boton-play', '#gran-play']) {
+    const boton = $(selector);
+    const clase = selector === '#boton-play' ? 'icono--sm' : '';
+    boton.replaceChildren(crearIcono(nombreIcono, clase));
+    boton.setAttribute('aria-label', audio.paused ? 'Reproducir' : 'Pausar');
   }
 }
 
@@ -347,8 +472,10 @@ function reproducir(cancion) {
   audio.src = urlAudioActual;
   idActual = cancion.id;
   audio.currentTime = 0;
+  actualizarMiniProgreso();
   dibujarBiblioteca();
   dibujarReproductor();
+  actualizarBotonPlay();
   audio.play()
     .then(actualizarMediaSession)
     .catch((error) => mostrarAviso(`No se pudo reproducir: ${error.message}`));
@@ -367,15 +494,71 @@ function alternar() {
   }
 }
 
-function cambiarPista(delta) {
+function indiceActual() {
+  return canciones.findIndex((c) => c.id === idActual);
+}
+
+// Elige una canción no escuchada recientemente antes de repetirlas
+function elegirIndiceAleatorio(indiceDesde) {
+  if (canciones.length < 2) return indiceDesde;
+  let disponibles = canciones
+    .map((_, indice) => indice)
+    .filter((indice) => indice !== indiceDesde && !historialAleatorio.includes(indice));
+
+  if (!disponibles.length) {
+    historialAleatorio = [];
+    disponibles = canciones
+      .map((_, indice) => indice)
+      .filter((indice) => indice !== indiceDesde);
+  }
+
+  const elegido = disponibles[Math.floor(Math.random() * disponibles.length)];
+  historialAleatorio.push(indiceDesde);
+  return elegido;
+}
+
+function cambiarPista(delta, desdeFinal = false) {
   if (!canciones.length) return;
-  const indice = canciones.findIndex((c) => c.id === idActual);
-  const siguiente = indice + delta;
-  if (siguiente < 0 || siguiente >= canciones.length) {
-    detener();
+
+  const indice = indiceActual();
+  if (indice < 0) {
+    reproducir(canciones[0]);
     return;
   }
-  reproducir(canciones[siguiente]);
+
+  // "Repetir una" solo actúa al terminar naturalmente la canción
+  if (desdeFinal && modoRepeticion === 'one') {
+    reproducir(canciones[indice]);
+    return;
+  }
+
+  let destino;
+  if (delta > 0) {
+    destino = aleatorio ? elegirIndiceAleatorio(indice) : indice + 1;
+    if (destino >= canciones.length) {
+      if (modoRepeticion === 'all') {
+        destino = 0;
+      } else {
+        detener();
+        return;
+      }
+    }
+  } else {
+    destino = aleatorio && historialAleatorio.length
+      ? historialAleatorio.pop()
+      : indice - 1;
+    if (destino < 0) {
+      if (modoRepeticion === 'all') {
+        destino = canciones.length - 1;
+      } else {
+        audio.currentTime = 0;
+        actualizarPosicion();
+        return;
+      }
+    }
+  }
+
+  reproducir(canciones[destino]);
 }
 
 function anterior() {
@@ -393,9 +576,12 @@ function detener() {
   if (urlAudioActual) URL.revokeObjectURL(urlAudioActual);
   urlAudioActual = null;
   idActual = null;
+  historialAleatorio = [];
   if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'none';
+  actualizarMiniProgreso();
   dibujarBiblioteca();
   dibujarReproductor();
+  actualizarBotonPlay();
 }
 
 async function eliminar(cancion) {
@@ -525,6 +711,13 @@ $('#gran-anterior').addEventListener('click', anterior);
 $('#boton-siguiente').addEventListener('click', () => cambiarPista(1));
 $('#gran-siguiente').addEventListener('click', () => cambiarPista(1));
 
+for (const selector of ['#mini-aleatorio', '#gran-aleatorio']) {
+  $(selector).addEventListener('click', alternarAleatorio);
+}
+for (const selector of ['#mini-repeticion', '#gran-repeticion']) {
+  $(selector).addEventListener('click', alternarRepeticion);
+}
+
 $('#abrir-pantalla').addEventListener('click', () => { pantalla.hidden = false; });
 $('#cerrar-pantalla').addEventListener('click', () => { pantalla.hidden = true; });
 
@@ -538,11 +731,13 @@ audio.addEventListener('timeupdate', () => {
   tiempoActual.textContent = formatoTiempo(audio.currentTime);
   tiempoTotal.textContent = formatoTiempo(audio.duration);
   progreso.value = audio.duration ? (audio.currentTime / audio.duration) * 100 : 0;
+  actualizarMiniProgreso();
   actualizarPosicion();
 });
 
 audio.addEventListener('loadedmetadata', () => {
   tiempoTotal.textContent = formatoTiempo(audio.duration);
+  actualizarMiniProgreso();
   const cancion = cancionActual();
   if (cancion && Number.isFinite(audio.duration) && audio.duration > 0) {
     cancion.duracion = audio.duration;
@@ -551,20 +746,18 @@ audio.addEventListener('loadedmetadata', () => {
 });
 
 audio.addEventListener('play', () => {
-  $('#boton-play').textContent = '❚❚';
-  $('#gran-play').textContent = '❚❚';
+  actualizarBotonPlay();
   if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
   actualizarPosicion();
 });
 
 audio.addEventListener('pause', () => {
-  $('#boton-play').textContent = '▶';
-  $('#gran-play').textContent = '▶';
+  actualizarBotonPlay();
   if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
   actualizarPosicion();
 });
 
-audio.addEventListener('ended', () => cambiarPista(1));
+audio.addEventListener('ended', () => cambiarPista(1, true));
 
 // ---------------------------------------------------------------------------
 // Arranque
@@ -572,6 +765,9 @@ audio.addEventListener('ended', () => cambiarPista(1));
 
 async function iniciar() {
   baseDatos = abrirBaseDatos();
+  cargarPreferencias();
+  actualizarBotonesModos();
+  actualizarBotonPlay();
   registrarAccionesRemotas();
   pedirPersistencia();
 

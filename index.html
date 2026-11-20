@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Reproductor Offline</title>
   <meta name="description" content="Tu música, guardada en tu teléfono y reproducible sin internet.">
-  <meta name="theme-color" content="#0b1020">
+  <meta name="theme-color" content="#07090f">
 
   <!-- iOS: hace que se abra a pantalla completa cuando se añade al inicio -->
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -18,23 +18,72 @@
   <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
+  <!-- Sprite de iconos vectoriales: una sola familia, escalable y sin emojis -->
+  <svg class="sprite" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false">
+    <symbol id="i-mas" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-musica" viewBox="0 0 24 24">
+      <path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>
+    </symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+    <symbol id="i-abajo" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+    <symbol id="i-anterior" viewBox="0 0 24 24">
+      <path d="M6 5v14"/><path d="M19 5 9 12l10 7V5Z" fill="currentColor" stroke="none"/>
+    </symbol>
+    <symbol id="i-siguiente" viewBox="0 0 24 24">
+      <path d="M18 5v14"/><path d="M5 5l10 7-10 7V5Z" fill="currentColor" stroke="none"/>
+    </symbol>
+    <symbol id="i-play" viewBox="0 0 24 24">
+      <path d="M8 5.2v13.6L19 12 8 5.2Z" fill="currentColor" stroke="none"/>
+    </symbol>
+    <symbol id="i-pausa" viewBox="0 0 24 24">
+      <rect x="7" y="5" width="3.6" height="14" rx="1" fill="currentColor" stroke="none"/>
+      <rect x="13.4" y="5" width="3.6" height="14" rx="1" fill="currentColor" stroke="none"/>
+    </symbol>
+    <symbol id="i-aleatorio" viewBox="0 0 24 24">
+      <path d="M2 18h1.4c1.3 0 2.5-.6 3.3-1.7l6.1-8.6c.7-1.1 2-1.7 3.3-1.7H22"/>
+      <path d="m18 2 4 4-4 4"/>
+      <path d="M2 6h1.9c1.5 0 2.9.9 3.6 2.2"/>
+      <path d="m18 14 4 4-4 4"/>
+      <path d="M22 18h-5.9c-1.3 0-2.6-.7-3.3-1.8l-.5-.8"/>
+      <path d="m16.5 14.5.5.5c.7 1.1 2 1.8 3.3 1.8H22"/>
+    </symbol>
+    <symbol id="i-repetir" viewBox="0 0 24 24">
+      <path d="m17 2 4 4-4 4"/>
+      <path d="M3 11v-1a4 4 0 0 1 4-4h14"/>
+      <path d="m7 22-4-4 4-4"/>
+      <path d="M21 13v1a4 4 0 0 1-4 4H3"/>
+    </symbol>
+    <symbol id="i-repetir-uno" viewBox="0 0 24 24">
+      <path d="m17 2 4 4-4 4"/>
+      <path d="M3 11v-1a4 4 0 0 1 4-4h14"/>
+      <path d="m7 22-4-4 4-4"/>
+      <path d="M21 13v1a4 4 0 0 1-4 4H3"/>
+      <text x="12" y="15.5" text-anchor="middle" font-size="9" font-weight="700" fill="currentColor" stroke="none">1</text>
+    </symbol>
+  </svg>
+
   <div class="app">
     <header class="cabecera">
       <div class="cabecera__titulo">
-        <span class="cabecera__icono" aria-hidden="true">♪</span>
-        <div>
+        <span class="cabecera__icono" aria-hidden="true">
+          <svg class="icono"><use href="#i-musica"></use></svg>
+        </span>
+        <span class="cabecera__textos">
           <h1>Mi música</h1>
-          <p id="estado-almacenamiento" class="cabecera__estado">Calculando espacio…</p>
-        </div>
+          <span id="estado-almacenamiento" class="cabecera__estado">Calculando espacio…</span>
+        </span>
       </div>
       <button id="boton-importar" class="boton boton--primario" type="button">
-        <span aria-hidden="true">＋</span> Importar
+        <svg class="icono icono--sm" aria-hidden="true"><use href="#i-mas"></use></svg>
+        <span>Importar</span>
       </button>
     </header>
 
     <main class="contenido">
       <section id="vacio" class="vacio" hidden>
-        <div class="vacio__icono" aria-hidden="true">♫</div>
+        <div class="vacio__icono" aria-hidden="true">
+          <svg class="icono"><use href="#i-musica"></use></svg>
+        </div>
         <h2>Aún no hay canciones</h2>
         <p>Importa archivos desde <strong>Archivos</strong>. Se copian a este teléfono y funcionan sin internet.</p>
         <button id="boton-importar-vacio" class="boton boton--primario" type="button">Elegir canciones</button>
@@ -45,18 +94,37 @@
     </main>
 
     <footer id="reproductor" class="reproductor" hidden>
-      <button id="abrir-pantalla" class="reproductor__info" type="button" aria-label="Abrir reproductor">
-        <img id="mini-caratula" class="reproductor__caratula" alt="" hidden>
-        <span id="mini-caratula-vacia" class="reproductor__caratula-vacia" aria-hidden="true">♪</span>
-        <span class="reproductor__textos">
-          <strong id="mini-titulo"></strong>
-          <small id="mini-artista"></small>
-        </span>
-      </button>
-      <div class="reproductor__controles">
-        <button id="boton-anterior" class="boton-icono" type="button" aria-label="Canción anterior">⏮</button>
-        <button id="boton-play" class="boton-icono boton-icono--principal" type="button" aria-label="Reproducir o pausar">▶</button>
-        <button id="boton-siguiente" class="boton-icono" type="button" aria-label="Canción siguiente">⏭</button>
+      <div class="mini">
+        <div class="mini__progreso" aria-hidden="true"><span id="mini-progreso"></span></div>
+        <button id="abrir-pantalla" class="mini__info" type="button" aria-label="Abrir reproductor a pantalla completa">
+          <img id="mini-caratula" class="mini__caratula" alt="" hidden>
+          <span id="mini-caratula-vacia" class="mini__caratula-vacia" aria-hidden="true">
+            <svg class="icono"><use href="#i-musica"></use></svg>
+          </span>
+          <span class="mini__textos">
+            <strong id="mini-titulo"></strong>
+            <small id="mini-artista"></small>
+          </span>
+        </button>
+        <div class="mini__controles">
+          <button id="mini-aleatorio" class="boton-icono boton-icono--modo" type="button"
+                  data-modo="aleatorio" aria-label="Aleatorio: desactivado" aria-pressed="false">
+            <svg class="icono icono--sm" aria-hidden="true"><use href="#i-aleatorio"></use></svg>
+          </button>
+          <button id="boton-anterior" class="boton-icono" type="button" aria-label="Canción anterior">
+            <svg class="icono icono--sm" aria-hidden="true"><use href="#i-anterior"></use></svg>
+          </button>
+          <button id="boton-play" class="boton-icono boton-icono--principal" type="button" aria-label="Reproducir">
+            <svg class="icono icono--sm" aria-hidden="true"><use href="#i-play"></use></svg>
+          </button>
+          <button id="boton-siguiente" class="boton-icono" type="button" aria-label="Canción siguiente">
+            <svg class="icono icono--sm" aria-hidden="true"><use href="#i-siguiente"></use></svg>
+          </button>
+          <button id="mini-repeticion" class="boton-icono boton-icono--modo" type="button"
+                  data-modo="repeticion" aria-label="Repetición: desactivada" aria-pressed="false">
+            <svg class="icono icono--sm" aria-hidden="true"><use href="#i-repetir"></use></svg>
+          </button>
+        </div>
       </div>
     </footer>
   </div>
@@ -64,17 +132,26 @@
   <div id="pantalla-completa" class="overlay" hidden>
     <div class="overlay__contenido">
       <div class="overlay__barra">
-        <button id="cerrar-pantalla" class="boton-icono" type="button" aria-label="Cerrar reproductor">▼</button>
+        <button id="cerrar-pantalla" class="boton-icono" type="button" aria-label="Cerrar reproductor">
+          <svg class="icono icono--sm" aria-hidden="true"><use href="#i-abajo"></use></svg>
+        </button>
         <span>Reproduciendo</span>
         <span class="overlay__espacio"></span>
       </div>
-      <img id="gran-caratula" class="gran-caratula" alt="" hidden>
-      <div id="gran-caratula-vacia" class="gran-caratula-vacia" aria-hidden="true">♪</div>
+
+      <div class="portada">
+        <img id="gran-caratula" class="portada__imagen" alt="" hidden>
+        <div id="gran-caratula-vacia" class="portada__vacia" aria-hidden="true">
+          <svg class="icono"><use href="#i-musica"></use></svg>
+        </div>
+      </div>
+
       <div class="overlay__textos">
         <strong id="gran-titulo"></strong>
         <span id="gran-artista"></span>
         <small id="gran-album"></small>
       </div>
+
       <div class="barra-progreso">
         <input id="progreso" type="range" min="0" max="100" value="0" step="0.1" aria-label="Posición de la canción">
         <div class="barra-progreso__tiempos">
@@ -82,11 +159,27 @@
           <span id="tiempo-total">0:00</span>
         </div>
       </div>
+
       <div class="overlay__controles">
-        <button id="gran-anterior" class="boton-icono" type="button" aria-label="Anterior">⏮</button>
-        <button id="gran-play" class="boton-icono boton-icono--principal boton-icono--grande" type="button" aria-label="Reproducir o pausar">▶</button>
-        <button id="gran-siguiente" class="boton-icono" type="button" aria-label="Siguiente">⏭</button>
+        <button id="gran-aleatorio" class="boton-icono boton-icono--modo" type="button"
+                data-modo="aleatorio" aria-label="Aleatorio: desactivado" aria-pressed="false">
+          <svg class="icono" aria-hidden="true"><use href="#i-aleatorio"></use></svg>
+        </button>
+        <button id="gran-anterior" class="boton-icono" type="button" aria-label="Anterior">
+          <svg class="icono" aria-hidden="true"><use href="#i-anterior"></use></svg>
+        </button>
+        <button id="gran-play" class="boton-icono boton-icono--principal boton-icono--grande" type="button" aria-label="Reproducir">
+          <svg class="icono" aria-hidden="true"><use href="#i-play"></use></svg>
+        </button>
+        <button id="gran-siguiente" class="boton-icono" type="button" aria-label="Siguiente">
+          <svg class="icono" aria-hidden="true"><use href="#i-siguiente"></use></svg>
+        </button>
+        <button id="gran-repeticion" class="boton-icono boton-icono--modo" type="button"
+                data-modo="repeticion" aria-label="Repetición: desactivada" aria-pressed="false">
+          <svg class="icono" aria-hidden="true"><use href="#i-repetir"></use></svg>
+        </button>
       </div>
+      <p class="overlay__pista">Toca los iconos de aleatorio y repetir para cambiar el modo.</p>
     </div>
   </div>
 
