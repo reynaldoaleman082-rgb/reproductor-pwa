@@ -51,6 +51,8 @@ let urlsCaratulas = new Map(); // id de canción -> URL de su carátula en la li
 let urlsAudioPendientes = []; // blobs del audio anterior, pendientes de liberar
 let caratulasMediaSession = new Map(); // id de canción -> carátula para la pantalla de bloqueo
 let cancionesConError = new Set(); // ids que fallaron al leer: se excluyen de la rotación
+let idCargando = null; // id del audio cuyo src se está cargando
+let avanzando = false; // evita cadenas de avance por errores transitorios
 let temporizadorAviso;
 let temporizadorSalidaAviso;
 let temporizadorFinCancion;
@@ -571,7 +573,10 @@ function crearFila(cancion, indice, animar) {
   const botonReproducir = crearElemento('button', 'pista__boton');
   botonReproducir.type = 'button';
   botonReproducir.setAttribute('aria-label', `Reproducir ${cancion.titulo}`);
-  botonReproducir.addEventListener('click', () => reproducir(cancion, { reanudar: true }));
+  botonReproducir.addEventListener('click', () => {
+    cancionesConError.delete(cancion.id); // un toque explícito reintenta la canción
+    reproducir(cancion, { reanudar: true });
+  });
 
   const arte = crearElemento('span', 'pista__arte');
   const url = urlCaratulaLista(cancion);
@@ -822,13 +827,18 @@ function reproducirAudio() {
 // Un solo punto de avance: lo usan 'ended', 'error', el respaldo y el regreso
 // a primer plano. Así no se puede avanzar dos veces por la misma canción.
 function avanzarAlSiguiente() {
-  if (!idActual) return;
-  olvidarPosicion(idActual);
-  posicionPendiente = null;
-  saltoPendiente = null;
-  saltandoAlSiguiente = true;
-  cambiarPista(1, true);
-  saltandoAlSiguiente = false;
+  if (!idActual || avanzando) return;
+  avanzando = true;
+  try {
+    olvidarPosicion(idActual);
+    posicionPendiente = null;
+    saltoPendiente = null;
+    saltandoAlSiguiente = true;
+    cambiarPista(1, true);
+    saltandoAlSiguiente = false;
+  } finally {
+    avanzando = false;
+  }
 }
 
 // Respaldo por si el evento 'ended' no llega con la app en segundo plano.
@@ -937,6 +947,7 @@ function reproducirAhora(cancion, { reanudar = false } = {}) {
   configurarSesionDeAudio();
   if (urlAudioActual) urlsAudioPendientes.push(urlAudioActual);
   urlAudioActual = URL.createObjectURL(cancion.blob);
+  idCargando = cancion.id;
   audio.src = urlAudioActual;
   // Safari/iOS necesita load() tras cambiar src para encadenar la siguiente pista.
   audio.load();
@@ -966,7 +977,10 @@ function reproducirAhora(cancion, { reanudar = false } = {}) {
     })
     .catch((error) => {
       liberarUrlsAudioPendientes();
-      mostrarAviso(`No se pudo reproducir: ${error.message}`);
+      // El evento 'error' ya avisó si el archivo estaba dañado.
+      if (!cancionesConError.has(idReproducido)) {
+        mostrarAviso(`No se pudo reproducir: ${error.message}`);
+      }
     });
 }
 
@@ -990,6 +1004,7 @@ function restaurarCancion() {
   configurarSesionDeAudio();
   if (urlAudioActual) URL.revokeObjectURL(urlAudioActual);
   urlAudioActual = URL.createObjectURL(cancion.blob);
+  idCargando = cancion.id;
   audio.src = urlAudioActual;
   audio.load();
   const guardada = Number(posicionesGuardadas[cancion.id]) || 0;
@@ -1007,6 +1022,7 @@ function restaurarCancion() {
 
 function alternar() {
   if (!idActual) {
+    cancionesConError.clear(); // el botón de play reintenta desde cero
     const cola = colaReproduccion();
     if (cola.length) reproducir(cola[0], { reanudar: true });
     return;
@@ -1472,6 +1488,7 @@ botonDuplicados.addEventListener('click', () => {
 
 // Un solo toque inicia la biblioteca y encadena las canciones automáticamente
 reproducirTodo.addEventListener('click', () => {
+  cancionesConError.clear(); // "Reproducir todo" reintenta también las marcadas
   const cola = colaReproduccion();
   if (!cola.length) {
     mostrarAviso(cancionesVisibles.length
@@ -1644,11 +1661,15 @@ audio.addEventListener('ended', () => {
 // Un archivo dañado no debe dejar la cola detenida: se salta al siguiente y se
 // excluye de la rotación para que "repetir todas" no gire en círculos.
 audio.addEventListener('error', () => {
-  if (!idActual) return;
+  const idConError = idCargando || idActual;
+  if (!idConError || idConError !== idActual) return; // error de una pista ya abandonada
+  // iOS dispara MEDIA_ERR_ABORTED (1) al cambiar src o llamar a load().
+  // No es un archivo dañado: marcarlo encadenaba avances infinitos.
+  if (audio.error?.code === 1) return;
   cancelarFinCancion();
-  cancionesConError.add(idActual);
+  cancionesConError.add(idConError);
   historialAleatorio = [];
-  olvidarPosicion(idActual);
+  olvidarPosicion(idConError);
   mostrarAviso('No se pudo leer este archivo; se pasa al siguiente.');
   avanzarAlSiguiente();
 });
