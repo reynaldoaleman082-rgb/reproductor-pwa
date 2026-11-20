@@ -1120,14 +1120,9 @@ function cambiarPista(delta, desdeFinal = false) {
   let destino;
   if (delta > 0) {
     destino = aleatorio ? elegirIndiceAleatorio(indice, cola) : indice + 1;
-    if (destino >= cola.length) {
-      if (modoRepeticion === 'all') {
-        destino = 0;
-      } else {
-        detener();
-        return;
-      }
-    }
+    // Al terminar la lista se vuelve siempre a la primera canción, también con
+    // "repetición desactivada": la cola nunca se detiene al llegar al final.
+    if (destino >= cola.length) destino = 0;
   } else {
     destino = aleatorio && historialAleatorio.length
       ? historialAleatorio.pop()
