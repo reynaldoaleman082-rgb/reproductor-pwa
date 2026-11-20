@@ -1,7 +1,7 @@
 /* Service worker: solo cachea la "cáscara" de la app (HTML/CSS/JS/iconos).
    El audio NO pasa por aquí: vive en IndexedDB dentro del teléfono. */
 
-const VERSION = 'reproductor-shell-v12';
+const VERSION = 'reproductor-shell-v13';
 // Cachés de versiones anteriores, antes de que llevaran prefijo propio
 const CACHES_ANTIGUAS = ['shell-v5', 'shell-v6', 'shell-v7'];
 const SHELL = [
