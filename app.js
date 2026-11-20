@@ -32,6 +32,7 @@ const CLAVE_POSICIONES = 'reproductor-posiciones';
 const CLAVE_CANCION_ACTUAL = 'reproductor-cancion-actual';
 const MODOS_REPETICION = ['off', 'all', 'one'];
 const ETIQUETAS_REPETICION = { off: 'desactivada', all: 'todas', one: 'una canción' };
+const DURACIONES_FUNDIDO = [2, 4, 8];
 const ORDENES = ['fecha', 'titulo', 'artista', 'duracion'];
 const UMBRAL_ESPACIO = 0.9; // se deja libre al menos el 10 % del almacenamiento
 const LOTE_IMPORTACION = 4;
@@ -68,6 +69,11 @@ let saltoPendiente = null; // segundos a aplicar cuando la canción ya tenga dur
 let modoRepeticion = 'off'; // off | all | one
 let aleatorio = false;
 let historialAleatorio = [];
+let fundidoActivo = false;
+let duracionFundido = 4; // segundos: se reparte a partes iguales entre salida y entrada
+let temporizadoresFundido = [];
+let fundidoEnCurso = false;
+let volumenAntesDelFundido = 1;
 
 // ---------------------------------------------------------------------------
 // Iconos SVG (misma familia en toda la interfaz, sin emojis)
@@ -90,6 +96,9 @@ function cargarPreferencias() {
       modoRepeticion = datos.modoRepeticion;
     }
     aleatorio = Boolean(datos.aleatorio);
+    fundidoActivo = Boolean(datos.fundidoActivo);
+    const duracionGuardada = Number(datos.duracionFundido);
+    if (DURACIONES_FUNDIDO.includes(duracionGuardada)) duracionFundido = duracionGuardada;
     if (ORDENES.includes(datos.orden)) ordenActual = datos.orden;
   } catch (_) {
     // Preferencias corruptas: se usan los valores por defecto.
@@ -101,6 +110,8 @@ function guardarPreferencias() {
     localStorage.setItem(CLAVE_PREFERENCIAS, JSON.stringify({
       modoRepeticion,
       aleatorio,
+      fundidoActivo,
+      duracionFundido,
       orden: ordenActual
     }));
   } catch (_) {
@@ -160,14 +171,20 @@ function aplicarFiltroYOrden() {
 
 function actualizarBotonesModos() {
   for (const boton of document.querySelectorAll('[data-modo]')) {
-    const esAleatorio = boton.dataset.modo === 'aleatorio';
-    const activo = esAleatorio ? aleatorio : modoRepeticion !== 'off';
+    const modo = boton.dataset.modo;
+    let activo;
+    if (modo === 'aleatorio') activo = aleatorio;
+    else if (modo === 'fundido') activo = fundidoActivo;
+    else activo = modoRepeticion !== 'off';
 
     boton.classList.toggle('is-activo', activo);
     boton.setAttribute('aria-pressed', String(activo));
 
-    if (esAleatorio) {
+    if (modo === 'aleatorio') {
       boton.setAttribute('aria-label', `Aleatorio: ${aleatorio ? 'activado' : 'desactivado'}`);
+    } else if (modo === 'fundido') {
+      boton.setAttribute('aria-label',
+        `Fundido entre canciones: ${activo ? `activado, ${duracionFundido} segundos` : 'desactivado'}`);
     } else {
       boton.setAttribute('aria-label', `Repetición: ${ETIQUETAS_REPETICION[modoRepeticion]}`);
       boton.querySelector('use').setAttribute(
@@ -176,6 +193,8 @@ function actualizarBotonesModos() {
       );
     }
   }
+  const selectorDuracion = $('#duracion-fundido');
+  if (selectorDuracion) selectorDuracion.value = String(duracionFundido);
 }
 
 function alternarRepeticion() {
@@ -198,6 +217,16 @@ function alternarAleatorio() {
   guardarPreferencias();
   actualizarBotonesModos();
   mostrarAviso(aleatorio ? 'Aleatorio activado' : 'Aleatorio desactivado');
+}
+
+function alternarFundido() {
+  fundidoActivo = !fundidoActivo;
+  if (!fundidoActivo) cancelarFundido();
+  guardarPreferencias();
+  actualizarBotonesModos();
+  mostrarAviso(fundidoActivo
+    ? `Fundido de ${duracionFundido} s activado`
+    : 'Fundido desactivado');
 }
 
 // ---------------------------------------------------------------------------
@@ -823,8 +852,83 @@ function cancelarFinCancion() {
   clearTimeout(temporizadorFinCancion);
 }
 
-function reproducir(cancion, { reanudar = false } = {}) {
-  if (!cancion) return;
+function cancelarFundido() {
+  temporizadoresFundido.forEach(clearTimeout);
+  temporizadoresFundido = [];
+  if (fundidoEnCurso) audio.volume = volumenAntesDelFundido;
+  fundidoEnCurso = false;
+}
+
+// Baja el volumen, cambia de pista y vuelve a subir. No se solapa audio:
+// la salida termina antes de que empiece la entrada. Con transición apagada,
+// o sin sonido que fundir (pista ya terminada), el cambio es inmediato.
+function cambiarConFundido(hacerCambio) {
+  if (!fundidoActivo || fundidoEnCurso) {
+    return Promise.resolve(hacerCambio());
+  }
+
+  volumenAntesDelFundido = audio.volume > 0 ? audio.volume : 1;
+  fundidoEnCurso = true;
+  const pasos = 10;
+  const intervalo = Math.max(16, (duracionFundido * 1000) / 2 / pasos);
+  const conSalida = Boolean(idActual) && !audio.paused && !audio.ended;
+
+  const subir = () => {
+    let paso = 0;
+    const avanzar = () => {
+      paso += 1;
+      audio.volume = Math.min(volumenAntesDelFundido, volumenAntesDelFundido * paso / pasos);
+      if (paso < pasos) {
+        temporizadoresFundido.push(setTimeout(avanzar, intervalo));
+        return;
+      }
+      audio.volume = volumenAntesDelFundido;
+      fundidoEnCurso = false;
+      temporizadoresFundido = [];
+    };
+    temporizadoresFundido.push(setTimeout(avanzar, intervalo));
+  };
+
+  const cambiarYSubir = () => {
+    let promesa;
+    try {
+      promesa = hacerCambio();
+    } catch (error) {
+      audio.volume = volumenAntesDelFundido;
+      fundidoEnCurso = false;
+      throw error;
+    }
+    // La subida empieza cuando el nuevo audio arranca, no antes.
+    return Promise.resolve(promesa).then(subir, subir);
+  };
+
+  if (!conSalida) {
+    audio.volume = 0;
+    return cambiarYSubir();
+  }
+
+  let paso = 0;
+  return new Promise((resolver) => {
+    const bajar = () => {
+      paso += 1;
+      audio.volume = Math.max(0, volumenAntesDelFundido * (1 - paso / pasos));
+      if (paso < pasos) {
+        temporizadoresFundido.push(setTimeout(bajar, intervalo));
+        return;
+      }
+      resolver(cambiarYSubir());
+    };
+    temporizadoresFundido.push(setTimeout(bajar, intervalo));
+  });
+}
+
+function reproducir(cancion, { reanudar = false, conFundido = true } = {}) {
+  if (!cancion) return Promise.resolve();
+  if (!conFundido) return reproducirAhora(cancion, { reanudar });
+  return cambiarConFundido(() => reproducirAhora(cancion, { reanudar }));
+}
+
+function reproducirAhora(cancion, { reanudar = false } = {}) {
   guardarPosicion({ forzar: true }); // recuerda dónde iba la canción anterior
   cancelarFinCancion();
   // Un salto pedido a la canción anterior no debe caer en esta
@@ -853,7 +957,7 @@ function reproducir(cancion, { reanudar = false } = {}) {
   actualizarBotonPlay();
   // Metadata antes de play(): la pantalla de bloqueo no debe mostrar la canción anterior
   actualizarMediaSession();
-  reproducirAudio()
+  return reproducirAudio()
     .then(() => {
       cancionesConError.delete(idReproducido);
       liberarUrlsAudioPendientes();
@@ -1008,6 +1112,7 @@ function anterior() {
 
 function detener() {
   cancelarFinCancion();
+  cancelarFundido();
   idActual = null;
   guardarIdActual(null);
   posicionPendiente = null;
@@ -1414,6 +1519,16 @@ for (const selector of ['#mini-aleatorio', '#gran-aleatorio']) {
 for (const selector of ['#mini-repeticion', '#gran-repeticion']) {
   $(selector).addEventListener('click', alternarRepeticion);
 }
+for (const selector of ['#mini-fundido', '#gran-fundido']) {
+  $(selector).addEventListener('click', alternarFundido);
+}
+$('#duracion-fundido').addEventListener('change', (evento) => {
+  const valor = Number(evento.target.value);
+  duracionFundido = DURACIONES_FUNDIDO.includes(valor) ? valor : 4;
+  guardarPreferencias();
+  actualizarBotonesModos();
+  mostrarAviso(`Fundido de ${duracionFundido} s`);
+});
 
 $('#abrir-pantalla').addEventListener('click', abrirPantalla);
 $('#cerrar-pantalla').addEventListener('click', cerrarPantalla);

@@ -67,6 +67,10 @@
       <path d="M21 13v1a4 4 0 0 1-4 4H3"/>
       <text x="12" y="15.5" text-anchor="middle" font-size="9" font-weight="700" fill="currentColor" stroke="none">1</text>
     </symbol>
+    <symbol id="i-fundido" viewBox="0 0 24 24">
+      <path d="M2 12h4l3-6 4 12 3-6h6"/>
+      <path d="M2 18h20" opacity=".4"/>
+    </symbol>
   </svg>
 
   <div class="app">
@@ -164,6 +168,10 @@
                   data-modo="repeticion" aria-label="Repetición: desactivada" aria-pressed="false">
             <svg class="icono icono--sm" aria-hidden="true"><use href="#i-repetir"></use></svg>
           </button>
+          <button id="mini-fundido" class="boton-icono boton-icono--modo" type="button"
+                  data-modo="fundido" aria-label="Fundido entre canciones: desactivado" aria-pressed="false">
+            <svg class="icono icono--sm" aria-hidden="true"><use href="#i-fundido"></use></svg>
+          </button>
         </div>
       </div>
     </footer>
@@ -219,7 +227,20 @@
           <svg class="icono" aria-hidden="true"><use href="#i-repetir"></use></svg>
         </button>
       </div>
-      <p class="overlay__pista">Toca los iconos de aleatorio y repetir para cambiar el modo.</p>
+      <div class="overlay__ajustes">
+        <button id="gran-fundido" class="boton-icono boton-icono--modo" type="button"
+                data-modo="fundido" aria-label="Fundido entre canciones: desactivado" aria-pressed="false">
+          <svg class="icono icono--sm" aria-hidden="true"><use href="#i-fundido"></use></svg>
+        </button>
+        <label class="overlay__duracion" for="duracion-fundido">Fundido
+          <select id="duracion-fundido" class="orden" aria-label="Duración del fundido entre canciones">
+            <option value="2">2 s</option>
+            <option value="4" selected>4 s</option>
+            <option value="8">8 s</option>
+          </select>
+        </label>
+      </div>
+      <p class="overlay__pista">Aleatorio y repetir están en los iconos de arriba.</p>
     </div>
   </div>
 

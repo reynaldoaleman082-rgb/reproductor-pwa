@@ -608,6 +608,15 @@ body.esta-sonando .boton-icono--principal::before { animation: pulso 2.4s ease-o
   font-variant-numeric: tabular-nums;
 }
 .overlay__controles { display: flex; align-items: center; justify-content: center; gap: 12px; }
+.overlay__ajustes { display: flex; align-items: center; justify-content: center; gap: 8px; }
+.overlay__duracion {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--secundario);
+}
+.overlay__duracion .orden { max-width: 84px; }
 .overlay__pista { margin: -6px 0 0; text-align: center; font-size: 12px; color: var(--secundario); opacity: .8; }
 
 .aviso {
