@@ -24,6 +24,17 @@ const orden = $('#orden');
 const sinResultados = $('#sin-resultados');
 const botonDuplicados = $('#boton-duplicados');
 const reproducirTodo = $('#reproducir-todo');
+const metaTema = $('#meta-tema');
+const consultaTemaOscuro = window.matchMedia
+  ? window.matchMedia('(prefers-color-scheme: dark)')
+  : null;
+
+// El CSS reacciona solo a prefers-color-scheme; la meta de la barra de estado no.
+function actualizarColorTema() {
+  if (!metaTema) return;
+  const oscuro = consultaTemaOscuro ? consultaTemaOscuro.matches : true;
+  metaTema.setAttribute('content', oscuro ? '#0f0f23' : '#f8fafc');
+}
 
 const DB_NAME = 'reproductor-offline';
 const STORE = 'tracks';
@@ -1695,6 +1706,14 @@ window.addEventListener('pagehide', () => guardarPosicion({ forzar: true }));
 
 async function iniciar() {
   baseDatos = abrirBaseDatos();
+  actualizarColorTema();
+  if (consultaTemaOscuro) {
+    if (consultaTemaOscuro.addEventListener) {
+      consultaTemaOscuro.addEventListener('change', actualizarColorTema);
+    } else if (consultaTemaOscuro.addListener) {
+      consultaTemaOscuro.addListener(actualizarColorTema);
+    }
+  }
   cargarPreferencias();
   posicionesGuardadas = leerPosiciones();
   idActual = leerIdActual();
