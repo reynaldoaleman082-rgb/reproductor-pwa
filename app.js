@@ -29,6 +29,7 @@ const DB_NAME = 'reproductor-offline';
 const STORE = 'tracks';
 const CLAVE_PREFERENCIAS = 'reproductor-preferencias';
 const CLAVE_POSICIONES = 'reproductor-posiciones';
+const CLAVE_CANCION_ACTUAL = 'reproductor-cancion-actual';
 const MODOS_REPETICION = ['off', 'all', 'one'];
 const ETIQUETAS_REPETICION = { off: 'desactivada', all: 'todas', one: 'una canción' };
 const ORDENES = ['fecha', 'titulo', 'artista', 'duracion'];
@@ -48,6 +49,7 @@ let urlCaratulaActual = null;
 let urlsCaratulas = new Map(); // id de canción -> URL de su carátula en la lista
 let urlsAudioPendientes = []; // blobs del audio anterior, pendientes de liberar
 let caratulasMediaSession = new Map(); // id de canción -> carátula para la pantalla de bloqueo
+let cancionesConError = new Set(); // ids que fallaron al leer: se excluyen de la rotación
 let temporizadorAviso;
 let temporizadorSalidaAviso;
 let temporizadorFinCancion;
@@ -111,6 +113,24 @@ function leerPosiciones() {
     return JSON.parse(localStorage.getItem(CLAVE_POSICIONES) || '{}');
   } catch (_) {
     return {};
+  }
+}
+
+// Recuerda la pista en curso para que los controles sigan vivos si iOS mata la app
+function guardarIdActual(id) {
+  try {
+    if (id) localStorage.setItem(CLAVE_CANCION_ACTUAL, id);
+    else localStorage.removeItem(CLAVE_CANCION_ACTUAL);
+  } catch (_) {
+    // Sin localStorage, la sesión solo se mantiene mientras la app esté abierta.
+  }
+}
+
+function leerIdActual() {
+  try {
+    return localStorage.getItem(CLAVE_CANCION_ACTUAL) || null;
+  } catch (_) {
+    return null;
   }
 }
 
@@ -212,6 +232,10 @@ async function operarDB(modo, accion) {
 
 async function cargarCanciones() {
   canciones = (await operarDB('readonly', (almacen) => almacen.getAll())) || [];
+  const vigentes = new Set(canciones.map((c) => c.id));
+  for (const id of cancionesConError) {
+    if (!vigentes.has(id)) cancionesConError.delete(id);
+  }
   aplicarFiltroYOrden();
   sincronizarCaratulas();
   renderizarBiblioteca({ animar: true });
@@ -341,8 +365,9 @@ function idNuevo() {
 
 // Las carátulas ID3 suelen ser enormes. Se guarda una versión cuadrada de hasta
 // 300 px en JPEG; si el navegador no puede decodificarla, se conserva el original.
+// Se devuelve también el lado real para declararlo bien en Media Session.
 async function reducirCaratula(blob) {
-  if (!blob || !globalThis.createImageBitmap) return blob;
+  if (!blob || !globalThis.createImageBitmap) return { blob, lado: null };
   try {
     const bitmap = await createImageBitmap(blob);
     const lado = Math.min(bitmap.width, bitmap.height, 300);
@@ -358,9 +383,9 @@ async function reducirCaratula(blob) {
     const reducida = await new Promise((resolver) =>
       lienzo.toBlob(resolver, 'image/jpeg', 0.82)
     );
-    return reducida || blob;
+    return { blob: reducida || blob, lado: reducida ? lado : null };
   } catch (_) {
-    return blob;
+    return { blob, lado: null };
   }
 }
 
@@ -376,7 +401,8 @@ async function prepararCancion(archivo) {
     titulo: meta.titulo || nombreLimpio(archivo.name),
     artista: meta.artista || 'Artista desconocido',
     album: meta.album || 'Álbum desconocido',
-    caratula,
+    caratula: caratula.blob,
+    caratulaLado: caratula.lado,
     duracion: 0,
     fecha: Date.now()
   };
@@ -400,6 +426,10 @@ function sincronizarCaratulas() {
     if (vigentes.has(id)) continue;
     URL.revokeObjectURL(url);
     urlsCaratulas.delete(id);
+  }
+  // Las carátulas de Media Session son data URLs: también hay que soltarlas
+  for (const id of caratulasMediaSession.keys()) {
+    if (!vigentes.has(id)) caratulasMediaSession.delete(id);
   }
 }
 
@@ -575,7 +605,7 @@ function actualizarProgresoVisual(segundos) {
 // Salto a un segundo concreto. Si aún no se conoce la duración, se guarda
 // el destino y se aplica en loadedmetadata (típico al adelantar justo al arrancar).
 function saltarA(segundos, { actualizarBarra = true } = {}) {
-  if (!Number.isFinite(segundos)) return;
+  if (!idActual || !Number.isFinite(segundos)) return;
   if (!Number.isFinite(audio.duration) || audio.duration <= 0) {
     saltoPendiente = Math.max(0, segundos);
     return;
@@ -698,18 +728,31 @@ function reproducirAudio() {
   });
 }
 
+// Un solo punto de avance: lo usan 'ended', 'error', el respaldo y el regreso
+// a primer plano. Así no se puede avanzar dos veces por la misma canción.
+function avanzarAlSiguiente() {
+  if (!idActual) return;
+  olvidarPosicion(idActual);
+  posicionPendiente = null;
+  saltoPendiente = null;
+  saltandoAlSiguiente = true;
+  cambiarPista(1, true);
+  saltandoAlSiguiente = false;
+}
+
 // Respaldo por si el evento 'ended' no llega con la app en segundo plano.
+// Al terminar, el navegador pone ended y paused a la vez: no se puede exigir
+// que siga sonando. El id evita que un timer viejo avance la canción nueva.
 function programarFinCancion() {
   clearTimeout(temporizadorFinCancion);
-  if (!Number.isFinite(audio.duration) || audio.duration <= 0) return;
+  if (!idActual || !Number.isFinite(audio.duration) || audio.duration <= 0) return;
+  const idProgramado = idActual;
   const restante = Math.max(0, audio.duration - audio.currentTime);
   temporizadorFinCancion = setTimeout(() => {
-    if (!audio.paused && !audio.ended && audio.currentTime >= audio.duration - 1.5) {
-      if (idActual) olvidarPosicion(idActual);
-      saltandoAlSiguiente = true;
-      cambiarPista(1, true);
-      saltandoAlSiguiente = false;
-    }
+    if (idActual !== idProgramado) return;
+    if (audio.paused && !audio.ended) return;
+    if (!audio.ended && audio.currentTime < audio.duration - 0.5) return;
+    avanzarAlSiguiente();
   }, (restante + 1.5) * 1000);
 }
 
@@ -721,11 +764,16 @@ function reproducir(cancion, { reanudar = false } = {}) {
   if (!cancion) return;
   guardarPosicion({ forzar: true }); // recuerda dónde iba la canción anterior
   cancelarFinCancion();
+  // Un salto pedido a la canción anterior no debe caer en esta
+  saltoPendiente = null;
+  posicionPendiente = null;
   configurarSesionDeAudio();
   if (urlAudioActual) urlsAudioPendientes.push(urlAudioActual);
   urlAudioActual = URL.createObjectURL(cancion.blob);
   audio.src = urlAudioActual;
   idActual = cancion.id;
+  guardarIdActual(idActual);
+  const idReproducido = cancion.id;
   const guardada = reanudar ? Number(posicionesGuardadas[cancion.id]) || 0 : 0;
   posicionPendiente = guardada > 1 ? guardada : null;
   audio.currentTime = 0;
@@ -738,6 +786,7 @@ function reproducir(cancion, { reanudar = false } = {}) {
   actualizarMediaSession();
   reproducirAudio()
     .then(() => {
+      cancionesConError.delete(idReproducido);
       liberarUrlsAudioPendientes();
       actualizarMediaSession();
       programarFinCancion();
@@ -748,15 +797,47 @@ function reproducir(cancion, { reanudar = false } = {}) {
     });
 }
 
+// Lista que realmente se va a encadenar: respeta el filtro y descarta los
+// archivos que dieron error, para no girar en círculos con una pista dañada.
+function colaReproduccion() {
+  if (!cancionesConError.size) return cancionesVisibles;
+  return cancionesVisibles.filter((c) => !cancionesConError.has(c.id));
+}
+
+// iOS puede matar la PWA en segundo plano. Sin gesto del usuario no se puede
+// dar play, pero sí reconstruir el src, la metadata y la posición para que el
+// botón de play de la pantalla de bloqueo vuelva a funcionar al tocarlo.
+function restaurarCancion() {
+  const cancion = cancionActual();
+  if (!cancion) {
+    guardarIdActual(null);
+    idActual = null;
+    return;
+  }
+  configurarSesionDeAudio();
+  if (urlAudioActual) URL.revokeObjectURL(urlAudioActual);
+  urlAudioActual = URL.createObjectURL(cancion.blob);
+  audio.src = urlAudioActual;
+  const guardada = Number(posicionesGuardadas[cancion.id]) || 0;
+  posicionPendiente = guardada > 1 ? guardada : null;
+  audio.currentTime = 0;
+  dibujarReproductor();
+  actualizarPistaActual();
+  actualizarBotonPlay();
+  actualizarMediaSession();
+}
+
 function alternar() {
   if (!idActual) {
-    if (cancionesVisibles.length) reproducir(cancionesVisibles[0], { reanudar: true });
+    const cola = colaReproduccion();
+    if (cola.length) reproducir(cola[0], { reanudar: true });
     return;
   }
   if (audio.paused) {
     configurarSesionDeAudio();
     reproducirAudio()
       .then(() => {
+        cancionesConError.delete(idActual);
         liberarUrlsAudioPendientes();
         actualizarMediaSession();
         programarFinCancion();
@@ -767,21 +848,17 @@ function alternar() {
   }
 }
 
-function indiceActual() {
-  return cancionesVisibles.findIndex((c) => c.id === idActual);
-}
-
 // Elige una canción no escuchada recientemente antes de repetirlas.
-// Se usa la lista visible para que el aleatorio respete el filtro activo.
-function elegirIndiceAleatorio(indiceDesde) {
-  if (cancionesVisibles.length < 2) return indiceDesde;
-  let disponibles = cancionesVisibles
+// Se usa la cola filtrada para que el aleatorio respete filtro y errores.
+function elegirIndiceAleatorio(indiceDesde, cola) {
+  if (cola.length < 2) return indiceDesde;
+  let disponibles = cola
     .map((_, indice) => indice)
     .filter((indice) => indice !== indiceDesde && !historialAleatorio.includes(indice));
 
   if (!disponibles.length) {
     historialAleatorio = [];
-    disponibles = cancionesVisibles
+    disponibles = cola
       .map((_, indice) => indice)
       .filter((indice) => indice !== indiceDesde);
   }
@@ -792,24 +869,32 @@ function elegirIndiceAleatorio(indiceDesde) {
 }
 
 function cambiarPista(delta, desdeFinal = false) {
-  if (!cancionesVisibles.length) return;
+  const cola = colaReproduccion();
 
-  const indice = indiceActual();
-  if (indice < 0) {
-    reproducir(cancionesVisibles[0]);
+  // "Repetir una" vale para la canción real aunque el filtro la esté ocultando
+  if (desdeFinal && modoRepeticion === 'one') {
+    const actual = cancionActual();
+    if (actual && !cancionesConError.has(actual.id)) reproducir(actual);
+    else if (cola.length) reproducir(cola[0]);
+    else detener();
     return;
   }
 
-  // "Repetir una" solo actúa al terminar naturalmente la canción
-  if (desdeFinal && modoRepeticion === 'one') {
-    reproducir(cancionesVisibles[indice]);
+  if (!cola.length) {
+    detener();
+    return;
+  }
+
+  const indice = cola.findIndex((c) => c.id === idActual);
+  if (indice < 0) {
+    reproducir(cola[0]);
     return;
   }
 
   let destino;
   if (delta > 0) {
-    destino = aleatorio ? elegirIndiceAleatorio(indice) : indice + 1;
-    if (destino >= cancionesVisibles.length) {
+    destino = aleatorio ? elegirIndiceAleatorio(indice, cola) : indice + 1;
+    if (destino >= cola.length) {
       if (modoRepeticion === 'all') {
         destino = 0;
       } else {
@@ -823,21 +908,25 @@ function cambiarPista(delta, desdeFinal = false) {
       : indice - 1;
     if (destino < 0) {
       if (modoRepeticion === 'all') {
-        destino = cancionesVisibles.length - 1;
+        destino = cola.length - 1;
       } else {
         audio.currentTime = 0;
         actualizarPosicion();
+        programarFinCancion();
         return;
       }
     }
   }
 
-  reproducir(cancionesVisibles[destino]);
+  reproducir(cola[destino]);
 }
 
 function anterior() {
   if (audio.currentTime > 3) {
     audio.currentTime = 0;
+    actualizarProgresoVisual(0);
+    actualizarPosicion({ forzar: true });
+    programarFinCancion();
     return;
   }
   cambiarPista(-1);
@@ -845,13 +934,16 @@ function anterior() {
 
 function detener() {
   cancelarFinCancion();
+  idActual = null;
+  guardarIdActual(null);
+  posicionPendiente = null;
+  saltoPendiente = null;
   audio.pause();
   audio.removeAttribute('src');
   audio.load();
   if (urlAudioActual) URL.revokeObjectURL(urlAudioActual);
   liberarUrlsAudioPendientes();
   urlAudioActual = null;
-  idActual = null;
   historialAleatorio = [];
   if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'none';
   actualizarMiniProgreso();
@@ -862,6 +954,7 @@ function detener() {
 
 async function eliminar(cancion) {
   if (cancion.id === idActual) detener();
+  cancionesConError.delete(cancion.id);
   olvidarPosicion(cancion.id);
   await operarDB('readwrite', (almacen) => almacen.delete(cancion.id));
   await cargarCanciones();
@@ -878,9 +971,10 @@ async function convertirCaratula(cancion) {
   return new Promise((resolver) => {
     const lector = new FileReader();
     lector.onload = () => {
+      const lado = Number(cancion.caratulaLado) || 300;
       const artwork = [{
         src: lector.result,
-        sizes: '512x512',
+        sizes: `${lado}x${lado}`,
         type: cancion.caratula.type || 'image/jpeg'
       }];
       caratulasMediaSession.set(cancion.id, artwork);
@@ -931,7 +1025,8 @@ function actualizarPosicion({ forzar = false } = {}) {
     navigator.mediaSession.setPositionState({
       duration: audio.duration,
       position: Math.min(audio.currentTime, audio.duration),
-      playbackRate: audio.paused ? 0 : 1
+      // La especificación exige un valor > 0: con 0 lanza TypeError y se pierde
+      playbackRate: audio.playbackRate > 0 ? audio.playbackRate : 1
     });
   } catch (_) {
     // Algunos motores rechazan valores intermedios; no es grave.
@@ -971,8 +1066,18 @@ function registrarAccionesRemotas() {
   const acciones = {
     play: () => {
       configurarSesionDeAudio();
+      // Si iOS mató la app, el elemento de audio puede no tener src: hay que
+      // reconstruirlo desde IndexedDB antes de intentar reproducir.
+      if (!audio.src) {
+        const cancion = cancionActual() || colaReproduccion()[0];
+        if (cancion) reproducir(cancion, { reanudar: true });
+        return;
+      }
+      if (!audio.paused) return;
       reproducirAudio()
         .then(() => {
+          cancionesConError.delete(idActual);
+          liberarUrlsAudioPendientes();
           actualizarMediaSession();
           programarFinCancion();
         })
@@ -982,13 +1087,17 @@ function registrarAccionesRemotas() {
     previoustrack: anterior,
     nexttrack: () => cambiarPista(1),
     seekto: (detalles) => {
-      if (Number.isFinite(detalles.position)) saltarA(detalles.position);
+      if (!idActual) return;
+      // La API entrega el destino en seekTime, no en position
+      if (Number.isFinite(detalles.seekTime)) saltarA(detalles.seekTime);
       else actualizarPosicion({ forzar: true });
     },
     seekbackward: (detalles) => {
+      if (!idActual) return;
       saltarA(audio.currentTime - (Number(detalles.seekOffset) || 10));
     },
     seekforward: (detalles) => {
+      if (!idActual) return;
       saltarA(audio.currentTime + (Number(detalles.seekOffset) || 10));
     }
   };
@@ -1020,15 +1129,18 @@ function cerrarPantalla() {
   if (pantalla.hidden || pantalla.classList.contains('is-saliendo')) return;
   pantalla.classList.add('is-saliendo');
 
+  let terminado = false;
   const terminar = () => {
+    if (terminado) return;
+    terminado = true;
+    pantalla.removeEventListener('animationend', alTerminar);
     pantalla.hidden = true;
     pantalla.classList.remove('is-saliendo');
   };
-  pantalla.addEventListener('animationend', function alTerminar(evento) {
-    if (evento.animationName !== 'overlay-salir') return;
-    pantalla.removeEventListener('animationend', alTerminar);
-    terminar();
-  });
+  function alTerminar(evento) {
+    if (evento.animationName === 'overlay-salir') terminar();
+  }
+  pantalla.addEventListener('animationend', alTerminar);
   // Si el navegador no dispara animationend, la pantalla acaba cerrándose igual
   setTimeout(() => {
     if (pantalla.classList.contains('is-saliendo')) terminar();
@@ -1096,8 +1208,8 @@ async function importar(archivos) {
     });
     if (!lote.length) continue;
 
-    const nuevas = await Promise.all(lote.map(prepararCancion));
     try {
+      const nuevas = await Promise.all(lote.map(prepararCancion));
       await guardarCanciones(nuevas);
       anadidos += nuevas.length;
     } catch (error) {
@@ -1151,7 +1263,10 @@ async function eliminarDuplicados() {
     transaccion.onabort = () => rechazar(transaccion.error);
   });
 
-  borradas.forEach((cancion) => olvidarPosicion(cancion.id));
+  borradas.forEach((cancion) => {
+    olvidarPosicion(cancion.id);
+    cancionesConError.delete(cancion.id);
+  });
   if (borradas.some((cancion) => cancion.id === idActual)) detener();
   await cargarCanciones();
   mostrarAviso(`${borradas.length} canción(es) duplicada(s) eliminada(s).`);
@@ -1161,8 +1276,14 @@ $('#boton-importar').addEventListener('click', () => entradaArchivos.click());
 $('#boton-importar-vacio').addEventListener('click', () => entradaArchivos.click());
 
 entradaArchivos.addEventListener('change', async () => {
-  await importar(entradaArchivos.files);
-  entradaArchivos.value = '';
+  try {
+    await importar(entradaArchivos.files);
+  } catch (error) {
+    mostrarAviso(`No se pudieron importar los archivos: ${error.message}`);
+  } finally {
+    // Sin esto, volver a elegir el mismo archivo no dispara 'change'
+    entradaArchivos.value = '';
+  }
 });
 
 botonDuplicados.addEventListener('click', () => {
@@ -1172,12 +1293,15 @@ botonDuplicados.addEventListener('click', () => {
 
 // Un solo toque inicia la biblioteca y encadena las canciones automáticamente
 reproducirTodo.addEventListener('click', () => {
-  if (!cancionesVisibles.length) {
-    mostrarAviso('Primero importa alguna canción.');
+  const cola = colaReproduccion();
+  if (!cola.length) {
+    mostrarAviso(cancionesVisibles.length
+      ? 'Ninguna canción de la lista se puede reproducir.'
+      : 'Primero importa alguna canción.');
     return;
   }
   configurarSesionDeAudio();
-  reproducir(cancionesVisibles[0], { reanudar: true });
+  reproducir(cola[0], { reanudar: true });
 });
 
 busqueda.addEventListener('input', () => {
@@ -1228,7 +1352,13 @@ contenido.addEventListener('scroll', () => {
 for (const evento of ['pointerdown', 'touchstart', 'keydown']) {
   progreso.addEventListener(evento, () => { arrastrandoProgreso = true; }, { passive: true });
 }
-// 'change' llega al soltar; estos dos últimos son solo una red de seguridad
+// 'change' llega al soltar; estos son una red de seguridad. Se usa timeout 0
+// para no limpiar el estado antes de que 'change' aplique el salto.
+for (const evento of ['pointerup', 'pointercancel', 'touchend']) {
+  progreso.addEventListener(evento, () => {
+    setTimeout(() => { arrastrandoProgreso = false; }, 0);
+  }, { passive: true });
+}
 for (const evento of ['keyup', 'blur']) {
   progreso.addEventListener(evento, () => { arrastrandoProgreso = false; }, { passive: true });
 }
@@ -1273,15 +1403,20 @@ audio.addEventListener('loadedmetadata', () => {
     if (destino > 0) audio.currentTime = destino;
     saltoPendiente = null;
   }
-  actualizarProgresoVisual(audio.currentTime);
+  if (!arrastrandoProgreso) actualizarProgresoVisual(audio.currentTime);
   actualizarPosicion({ forzar: true });
 
   const cancion = cancionActual();
   if (cancion && Number.isFinite(audio.duration) && audio.duration > 0) {
+    const anterior = cancion.duracion;
     cancion.duracion = audio.duration;
     const fila = filasPista.get(cancion.id);
     if (fila) actualizarFila(cancion, fila);
     operarDB('readwrite', (almacen) => almacen.put(cancion)).catch(() => {});
+    if (ordenActual === 'duracion' && anterior !== audio.duration) {
+      aplicarFiltroYOrden();
+      renderizarBiblioteca();
+    }
   }
   programarFinCancion();
 });
@@ -1289,7 +1424,7 @@ audio.addEventListener('loadedmetadata', () => {
 // Safari a veces conoce la duración tarde: se actualiza el deslizador de bloqueo
 audio.addEventListener('durationchange', () => {
   tiempoTotal.textContent = formatoTiempo(audio.duration);
-  actualizarProgresoVisual(audio.currentTime);
+  if (!arrastrandoProgreso) actualizarProgresoVisual(audio.currentTime);
   actualizarPosicion({ forzar: true });
   programarFinCancion();
 });
@@ -1312,24 +1447,29 @@ audio.addEventListener('pause', () => {
 
 audio.addEventListener('ended', () => {
   cancelarFinCancion();
-  if (idActual) olvidarPosicion(idActual);
-  posicionPendiente = null;
-  cambiarPista(1, true);
+  avanzarAlSiguiente();
 });
 
-// Un archivo dañado no debe dejar la cola detenida: se salta al siguiente
+// Un archivo dañado no debe dejar la cola detenida: se salta al siguiente y se
+// excluye de la rotación para que "repetir todas" no gire en círculos.
 audio.addEventListener('error', () => {
   if (!idActual) return;
   cancelarFinCancion();
+  cancionesConError.add(idActual);
+  historialAleatorio = [];
   olvidarPosicion(idActual);
   mostrarAviso('No se pudo leer este archivo; se pasa al siguiente.');
-  cambiarPista(1, true);
+  avanzarAlSiguiente();
 });
 
 // iOS puede suspender la app sin avisar: se guarda el punto de escucha al salir
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') {
     guardarPosicion({ forzar: true });
+  } else if (audio.ended) {
+    // 'ended' se perdió en segundo plano: se reanuda la cola aquí
+    cancelarFinCancion();
+    avanzarAlSiguiente();
   } else if (!audio.paused) {
     programarFinCancion();
   }
@@ -1344,6 +1484,7 @@ async function iniciar() {
   baseDatos = abrirBaseDatos();
   cargarPreferencias();
   posicionesGuardadas = leerPosiciones();
+  idActual = leerIdActual();
   orden.value = ordenActual;
   actualizarBotonesModos();
   actualizarBotonPlay();
@@ -1352,6 +1493,7 @@ async function iniciar() {
 
   try {
     await cargarCanciones();
+    if (idActual) restaurarCancion();
   } catch (error) {
     mostrarAviso(`No se pudo abrir la biblioteca local: ${error.message}`);
   }

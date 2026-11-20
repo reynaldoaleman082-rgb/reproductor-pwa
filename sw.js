@@ -1,7 +1,9 @@
 /* Service worker: solo cachea la "cáscara" de la app (HTML/CSS/JS/iconos).
    El audio NO pasa por aquí: vive en IndexedDB dentro del teléfono. */
 
-const VERSION = 'shell-v7';
+const VERSION = 'reproductor-shell-v8';
+// Cachés de versiones anteriores, antes de que llevaran prefijo propio
+const CACHES_ANTIGUAS = ['shell-v5', 'shell-v6', 'shell-v7'];
 const SHELL = [
   './',
   './index.html',
@@ -22,10 +24,15 @@ self.addEventListener('install', (evento) => {
 });
 
 self.addEventListener('activate', (evento) => {
+  // GitHub Pages comparte origen entre repositorios: solo borramos lo nuestro
   evento.waitUntil(
     caches.keys()
       .then((claves) => Promise.all(
-        claves.filter((clave) => clave !== VERSION).map((clave) => caches.delete(clave))
+        claves
+          .filter((clave) =>
+            (clave.startsWith('reproductor-shell-') && clave !== VERSION)
+            || CACHES_ANTIGUAS.includes(clave))
+          .map((clave) => caches.delete(clave))
       ))
       .then(() => self.clients.claim())
   );
