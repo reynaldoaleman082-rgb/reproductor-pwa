@@ -31,6 +31,9 @@
     <symbol id="i-musica" viewBox="0 0 24 24">
       <path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>
     </symbol>
+    <symbol id="i-diagnostico" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>
+    </symbol>
     <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
     <symbol id="i-abajo" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
     <symbol id="i-anterior" viewBox="0 0 24 24">
@@ -85,6 +88,10 @@
         </span>
       </div>
       <div class="cabecera__acciones">
+        <button id="boton-diagnostico" class="boton boton--secundario" type="button"
+                aria-label="Ver diagnóstico de reproducción" title="Diagnóstico">
+          <svg class="icono icono--sm" aria-hidden="true"><use href="#i-diagnostico"></use></svg>
+        </button>
         <button id="boton-duplicados" class="boton boton--secundario" type="button"
                 aria-label="Eliminar canciones duplicadas" title="Eliminar duplicados">
           <svg class="icono icono--sm" aria-hidden="true"><use href="#i-duplicados"></use></svg>
@@ -239,6 +246,22 @@
       <p class="overlay__pista">Aleatorio y repetir están en los iconos de arriba.</p>
     </div>
   </div>
+
+  <section id="diagnostico" class="diagnostico" role="dialog" aria-modal="true"
+           aria-label="Diagnóstico de reproducción" hidden>
+    <div class="diagnostico__cabeza">
+      <h2>Diagnóstico de reproducción</h2>
+      <button id="diagnostico-cerrar" class="boton-icono" type="button" aria-label="Cerrar diagnóstico">
+        <svg class="icono icono--sm" aria-hidden="true"><use href="#i-x"></use></svg>
+      </button>
+    </div>
+    <p class="diagnostico__ayuda">Se anotan los fallos de audio. Pulsa «Copiar» y pégalos cuando te los pida.</p>
+    <ol id="diagnostico-eventos" class="diagnostico__lista"></ol>
+    <div class="diagnostico__acciones">
+      <button id="diagnostico-copiar" class="boton boton--secundario" type="button">Copiar</button>
+      <button id="diagnostico-limpiar" class="boton boton--secundario" type="button">Borrar</button>
+    </div>
+  </section>
 
   <div id="aviso" class="aviso" role="status" aria-live="polite" hidden></div>
 

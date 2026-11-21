@@ -699,6 +699,41 @@ body.esta-sonando .boton-icono--principal::before { animation: pulso 2.4s ease-o
 .overlay__duracion .orden { max-width: 84px; }
 .overlay__pista { margin: -6px 0 0; text-align: center; font-size: 12px; color: var(--secundario); opacity: .8; }
 
+/* Registro de fallos: se abre desde el icono de diagnóstico de la cabecera */
+.diagnostico {
+  position: fixed;
+  inset: calc(env(safe-area-inset-top, 0px) + 56px) 12px calc(env(safe-area-inset-bottom, 0px) + 12px);
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid var(--borde);
+  border-radius: 18px;
+  background: var(--superficie-2);
+  color: var(--texto);
+  box-shadow: var(--sombra-aviso);
+}
+.diagnostico__cabeza { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.diagnostico__cabeza h2 { margin: 0; font-size: 17px; }
+.diagnostico__ayuda { margin: 0; font-size: 13px; line-height: 1.4; color: var(--secundario); }
+.diagnostico__lista {
+  flex: 1 1 auto;
+  margin: 0;
+  padding: 0 0 0 18px;
+  overflow-y: auto;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.diagnostico__lista li {
+  padding: 6px 0;
+  border-bottom: 1px solid var(--borde);
+  overflow-wrap: anywhere;
+}
+.diagnostico__lista li:last-child { border-bottom: 0; }
+.diagnostico__acciones { display: flex; gap: 8px; }
+.diagnostico__acciones .boton { flex: 1 1 0; }
+
 .aviso {
   position: fixed;
   left: 50%;

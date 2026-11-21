@@ -10,6 +10,9 @@ const vistaVacia = $('#vacio');
 const reproductor = $('#reproductor');
 const pantalla = $('#pantalla-completa');
 const aviso = $('#aviso');
+const botonDiagnostico = $('#boton-diagnostico');
+const panelDiagnostico = $('#diagnostico');
+const listaDiagnostico = $('#diagnostico-eventos');
 const progreso = $('#progreso');
 const miniProgreso = $('#mini-progreso');
 const tiempoActual = $('#tiempo-actual');
@@ -69,10 +72,17 @@ let bibliotecaLista = false; // la carga inicial terminó: ya se puede responder
 // Arranca en true: tras recargar no se reanuda nada sin que la persona dé play.
 // Solo se pone en false cuando la reproducción es intencionada.
 let pausadoPorUsuario = true;
+const eventosDiagnostico = [];
+const LIMITE_DIAGNOSTICO = 40;
 let temporizadorAviso;
 let temporizadorSalidaAviso;
 let temporizadorFinCancion;
 let saltandoAlSiguiente = false;
+// El fundido se serializa: un doble toque no debe ejecutar dos cambios de pista.
+let colaFundido = Promise.resolve();
+let cancelarBajadaFundido = null;
+let finalizarFundido = null;
+let fundidoCancelado = false;
 
 let textoBusqueda = '';
 let ordenActual = 'fecha';
@@ -786,6 +796,67 @@ function mostrarAviso(texto) {
   temporizadorAviso = setTimeout(ocultarAviso, 4200);
 }
 
+// Registro local de incidencias: no sale del teléfono. Sirve para poder
+// describir un fallo de iOS que de otro modo solo muestra un mensaje genérico.
+function registrarDiagnostico(origen, detalle) {
+  const hora = new Date().toLocaleTimeString('es-ES', { hour12: false });
+  const estado = `${document.visibilityState}/${audio.paused ? 'pausada' : 'sonando'}`;
+  eventosDiagnostico.push(`${hora} · ${origen} · ${estado} · ${detalle}`);
+  if (eventosDiagnostico.length > LIMITE_DIAGNOSTICO) eventosDiagnostico.shift();
+  if (panelDiagnostico && !panelDiagnostico.hidden) renderizarDiagnostico();
+}
+
+function renderizarDiagnostico() {
+  if (!listaDiagnostico) return;
+  listaDiagnostico.replaceChildren();
+  if (!eventosDiagnostico.length) {
+    const vacio = crearElemento('li', 'diagnostico__vacio');
+    vacio.textContent = 'Sin incidencias registradas.';
+    listaDiagnostico.append(vacio);
+    return;
+  }
+  eventosDiagnostico.forEach((evento) => {
+    const fila = crearElemento('li');
+    fila.textContent = evento;
+    listaDiagnostico.append(fila);
+  });
+}
+
+function abrirDiagnostico() {
+  if (!panelDiagnostico) return;
+  renderizarDiagnostico();
+  panelDiagnostico.hidden = false;
+  $('#diagnostico-cerrar')?.focus();
+}
+
+function cerrarDiagnostico() {
+  if (!panelDiagnostico || panelDiagnostico.hidden) return;
+  panelDiagnostico.hidden = true;
+  botonDiagnostico?.focus();
+}
+
+async function copiarDiagnostico() {
+  const texto = eventosDiagnostico.join('\n') || 'Sin incidencias registradas.';
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(texto);
+    } else {
+      const area = document.createElement('textarea');
+      area.value = texto;
+      area.setAttribute('readonly', '');
+      area.style.position = 'fixed';
+      area.style.opacity = '0';
+      document.body.append(area);
+      area.select();
+      document.execCommand('copy');
+      area.remove();
+    }
+    mostrarAviso('Diagnóstico copiado.');
+  } catch (_) {
+    mostrarAviso('No se pudo copiar; mantén pulsado el texto para seleccionarlo.');
+  }
+}
+
 async function mostrarEspacio() {
   if (!navigator.storage?.estimate) {
     estadoAlmacenamiento.textContent = 'Música guardada en este teléfono';
@@ -840,37 +911,43 @@ function liberarUrlAudio(id) {
 }
 
 // NotAllowedError significa que el navegador no aceptó play() sin gesto del
-// usuario. Reintentarlo fuera del gesto nunca funciona: solo hay que esperar
-// a que la persona toque el botón. AbortError sí es transitorio al cambiar src.
+// usuario. Reintentarlo en un callback de 'canplay' siempre ocurre fuera del
+// gesto: en iOS vuelve a fallar y además deja la promesa colgada. AbortError es
+// transitorio al cambiar src y lo ignoran los callers, no se reintenta aquí.
 function esPermisoDenegado(error) {
   return error?.name === 'NotAllowedError';
 }
 
 function reproducirAudio() {
   return audio.play().catch((error) => {
-    if (esPermisoDenegado(error) || error.name !== 'AbortError') throw error;
-    if (audio.readyState >= 2) return audio.play();
-    return new Promise((resolver, rechazar) => {
-      audio.addEventListener('canplay', () => audio.play().then(resolver, rechazar), { once: true });
-    });
+    registrarDiagnostico('play', `${error.name}: ${error.message}`);
+    throw error;
   });
 }
 
 // Un solo punto de avance: lo usan 'ended', 'error', el respaldo y el regreso
 // a primer plano. Así no se puede avanzar dos veces por la misma canción.
 function avanzarAlSiguiente() {
-  if (!idActual || avanzando) return;
+  // El cambio con fundido tarda hasta varios segundos: los flags deben seguir
+  // activos durante la transición o un 'ended' tardío avanza dos veces.
+  if (!idActual || avanzando || pausadoPorUsuario) return Promise.resolve();
   avanzando = true;
+  olvidarPosicion(idActual);
+  posicionPendiente = null;
+  saltoPendiente = null;
+  saltandoAlSiguiente = true;
+  let cambio;
   try {
-    olvidarPosicion(idActual);
-    posicionPendiente = null;
-    saltoPendiente = null;
-    saltandoAlSiguiente = true;
-    cambiarPista(1, true);
+    cambio = cambiarPista(1, true);
+  } catch (error) {
     saltandoAlSiguiente = false;
-  } finally {
     avanzando = false;
+    throw error;
   }
+  return Promise.resolve(cambio).finally(() => {
+    saltandoAlSiguiente = false;
+    avanzando = false;
+  });
 }
 
 // Respaldo por si el evento 'ended' no llega con la app en segundo plano.
@@ -882,7 +959,7 @@ function programarFinCancion() {
   const idProgramado = idActual;
   const restante = Math.max(0, audio.duration - audio.currentTime);
   temporizadorFinCancion = setTimeout(() => {
-    if (idActual !== idProgramado) return;
+    if (idActual !== idProgramado || pausadoPorUsuario) return;
     // iOS a veces pone paused sin ended al terminar. Basta con comprobar que
     // el tiempo llegó al final; si se pausó a mitad, este guarda impide avanzar.
     if (!audio.ended && audio.currentTime < audio.duration - 0.5) return;
@@ -897,25 +974,62 @@ function cancelarFinCancion() {
 function cancelarFundido() {
   temporizadoresFundido.forEach(clearTimeout);
   temporizadoresFundido = [];
-  if (fundidoEnCurso) audio.volume = volumenAntesDelFundido;
-  fundidoEnCurso = false;
+  if (cancelarBajadaFundido) {
+    // Se apagó el fundido a media bajada: aplicar el cambio pendiente ya, en vez
+    // de dejar la promesa colgada sin que la canción llegue a cambiar.
+    fundidoCancelado = true;
+    cancelarBajadaFundido();
+  } else if (finalizarFundido) {
+    // Estábamos en la subida: no hay cambio pendiente, pero la cola sigue
+    // esperando a que esta transición termine antes de aplicar la siguiente.
+    audio.volume = volumenAntesDelFundido;
+    fundidoEnCurso = false;
+    finalizarFundido();
+    finalizarFundido = null;
+  }
 }
 
 // Baja el volumen, cambia de pista y vuelve a subir. No se solapa audio:
 // la salida termina antes de que empiece la entrada. Con transición apagada,
 // o sin sonido que fundir (pista ya terminada), el cambio es inmediato.
+// Las transiciones se encolan: un doble toque no ejecuta dos cambios ni puede
+// acabar reproduciendo la canción elegida primero.
 function cambiarConFundido(hacerCambio) {
-  if (!fundidoActivo || fundidoEnCurso) {
-    return Promise.resolve(hacerCambio());
-  }
+  if (!fundidoActivo) return Promise.resolve(hacerCambio());
+  const resultado = colaFundido.then(() => ejecutarConFundido(hacerCambio));
+  colaFundido = resultado.catch(() => {});
+  return resultado;
+}
 
+function ejecutarConFundido(hacerCambio) {
+  fundidoCancelado = false;
   volumenAntesDelFundido = audio.volume > 0 ? audio.volume : 1;
   fundidoEnCurso = true;
   const pasos = 10;
   const intervalo = Math.max(16, (duracionFundido * 1000) / 2 / pasos);
   const conSalida = Boolean(idActual) && !audio.paused && !audio.ended;
+  // La cola se libera al terminar la subida, no al empezarla: si se liberara
+  // antes, la transición siguiente borraría los temporizadores de esta y su
+  // cambio de pista nunca se aplicaría.
+  let finalizar;
+  const terminada = new Promise((resolver) => { finalizar = resolver; });
+  finalizarFundido = finalizar;
+
+  const limpiar = () => {
+    audio.volume = volumenAntesDelFundido;
+    fundidoEnCurso = false;
+    temporizadoresFundido = [];
+    cancelarBajadaFundido = null;
+    finalizarFundido = null;
+    fundidoCancelado = false;
+    finalizar();
+  };
 
   const subir = () => {
+    if (fundidoCancelado) {
+      limpiar();
+      return;
+    }
     let paso = 0;
     const avanzar = () => {
       paso += 1;
@@ -924,9 +1038,7 @@ function cambiarConFundido(hacerCambio) {
         temporizadoresFundido.push(setTimeout(avanzar, intervalo));
         return;
       }
-      audio.volume = volumenAntesDelFundido;
-      fundidoEnCurso = false;
-      temporizadoresFundido = [];
+      limpiar();
     };
     temporizadoresFundido.push(setTimeout(avanzar, intervalo));
   };
@@ -936,12 +1048,11 @@ function cambiarConFundido(hacerCambio) {
     try {
       promesa = hacerCambio();
     } catch (error) {
-      audio.volume = volumenAntesDelFundido;
-      fundidoEnCurso = false;
+      limpiar();
       throw error;
     }
     // La subida empieza cuando el nuevo audio arranca, no antes.
-    return Promise.resolve(promesa).then(subir, subir);
+    return Promise.resolve(promesa).then(subir, subir).then(() => terminada);
   };
 
   if (!conSalida) {
@@ -951,6 +1062,10 @@ function cambiarConFundido(hacerCambio) {
 
   let paso = 0;
   return new Promise((resolver) => {
+    cancelarBajadaFundido = () => {
+      cancelarBajadaFundido = null;
+      resolver(cambiarYSubir());
+    };
     const bajar = () => {
       paso += 1;
       audio.volume = Math.max(0, volumenAntesDelFundido * (1 - paso / pasos));
@@ -958,7 +1073,7 @@ function cambiarConFundido(hacerCambio) {
         temporizadoresFundido.push(setTimeout(bajar, intervalo));
         return;
       }
-      resolver(cambiarYSubir());
+      cancelarBajadaFundido?.();
     };
     temporizadoresFundido.push(setTimeout(bajar, intervalo));
   });
@@ -982,7 +1097,6 @@ function reproducirAhora(cancion, { reanudar = false } = {}) {
   // Safari/iOS necesita load() tras cambiar src para encadenar la siguiente pista.
   audio.load();
   idActual = cancion.id;
-  pausadoPorUsuario = false;
   guardarIdActual(idActual);
   const idReproducido = cancion.id;
   const guardada = reanudar ? Number(posicionesGuardadas[cancion.id]) || 0 : 0;
@@ -999,18 +1113,27 @@ function reproducirAhora(cancion, { reanudar = false } = {}) {
   actualizarBotonPlay();
   // Metadata antes de play(): la pantalla de bloqueo no debe mostrar la canción anterior
   actualizarMediaSession();
+  // El watchdog se programa aunque play() falle: 'loadedmetadata' lo ajustará
+  // en cuanto se conozca la duración real de la pista.
+  programarFinCancion();
   return reproducirAudio()
     .then(() => {
+      // Un play() abortado por un cambio de pista posterior no debe tocar el
+      // estado de la canción nueva.
+      if (idActual !== idReproducido) return;
+      pausadoPorUsuario = false;
       cancionesConError.delete(idReproducido);
-      erroresAudioPorId.delete(idReproducido);
       actualizarMediaSession();
       programarFinCancion();
     })
     .catch((error) => {
+      if (idActual !== idReproducido) return;
       if (esPermisoDenegado(error)) {
+        pausadoPorUsuario = true;
         mostrarAviso('Toca el botón de reproducción para continuar.');
         return;
       }
+      if (error.name === 'AbortError') return; // transitorio al cambiar de src
       // El evento 'error' ya avisó si el archivo estaba dañado.
       if (!cancionesConError.has(idReproducido)) {
         mostrarAviso(`No se pudo reproducir: ${error.message}`);
@@ -1061,17 +1184,25 @@ function alternar() {
     return;
   }
   if (audio.paused) {
-    pausadoPorUsuario = false;
+    const idReproducido = idActual;
     configurarSesionDeAudio();
     reproducirAudio()
       .then(() => {
-        cancionesConError.delete(idActual);
-        erroresAudioPorId.delete(idActual);
+        if (idActual !== idReproducido) return;
+        pausadoPorUsuario = false;
+        cancionesConError.delete(idReproducido);
+        erroresAudioPorId.delete(idReproducido);
         actualizarMediaSession();
         programarFinCancion();
       })
       .catch((error) => {
-        if (!esPermisoDenegado(error)) mostrarAviso(error.message);
+        if (idActual !== idReproducido) return;
+        if (esPermisoDenegado(error)) {
+          pausadoPorUsuario = true;
+          mostrarAviso('Toca el botón de reproducción para continuar.');
+        } else if (error.name !== 'AbortError') {
+          mostrarAviso(error.message);
+        }
       });
   } else {
     pausadoPorUsuario = true;
@@ -1085,7 +1216,7 @@ function elegirIndiceAleatorio(indiceDesde, cola) {
   if (cola.length < 2) return indiceDesde;
   let disponibles = cola
     .map((_, indice) => indice)
-    .filter((indice) => indice !== indiceDesde && !historialAleatorio.includes(indice));
+    .filter((indice) => indice !== indiceDesde && !historialAleatorio.includes(cola[indice].id));
 
   if (!disponibles.length) {
     historialAleatorio = [];
@@ -1095,7 +1226,8 @@ function elegirIndiceAleatorio(indiceDesde, cola) {
   }
 
   const elegido = disponibles[Math.floor(Math.random() * disponibles.length)];
-  historialAleatorio.push(indiceDesde);
+  // Se guarda el id, no el índice: al borrar una canción la cola se reindexa.
+  historialAleatorio.push(cola[indiceDesde].id);
   return elegido;
 }
 
@@ -1105,21 +1237,20 @@ function cambiarPista(delta, desdeFinal = false) {
   // "Repetir una" vale para la canción real aunque el filtro la esté ocultando
   if (desdeFinal && modoRepeticion === 'one') {
     const actual = cancionActual();
-    if (actual && !cancionesConError.has(actual.id)) reproducir(actual);
-    else if (cola.length) reproducir(cola[0]);
-    else detener();
-    return;
+    if (actual && !cancionesConError.has(actual.id)) return reproducir(actual);
+    if (cola.length) return reproducir(cola[0]);
+    detener();
+    return Promise.resolve();
   }
 
   if (!cola.length) {
     detener();
-    return;
+    return Promise.resolve();
   }
 
   const indice = cola.findIndex((c) => c.id === idActual);
   if (indice < 0) {
-    reproducir(cola[0]);
-    return;
+    return reproducir(cola[0]);
   }
 
   let destino;
@@ -1129,9 +1260,13 @@ function cambiarPista(delta, desdeFinal = false) {
     // "repetición desactivada": la cola nunca se detiene al llegar al final.
     if (destino >= cola.length) destino = 0;
   } else {
-    destino = aleatorio && historialAleatorio.length
-      ? historialAleatorio.pop()
-      : indice - 1;
+    if (aleatorio && historialAleatorio.length) {
+      const idGuardado = historialAleatorio.pop();
+      const indiceGuardado = cola.findIndex((c) => c.id === idGuardado);
+      destino = indiceGuardado >= 0 ? indiceGuardado : indice - 1;
+    } else {
+      destino = indice - 1;
+    }
     if (destino < 0) {
       if (modoRepeticion === 'all') {
         destino = cola.length - 1;
@@ -1139,12 +1274,12 @@ function cambiarPista(delta, desdeFinal = false) {
         audio.currentTime = 0;
         actualizarPosicion();
         programarFinCancion();
-        return;
+        return Promise.resolve();
       }
     }
   }
 
-  reproducir(cola[destino]);
+  return reproducir(cola[destino]);
 }
 
 function anterior() {
@@ -1182,6 +1317,7 @@ async function eliminar(cancion) {
   liberarUrlAudio(cancion.id);
   cancionesConError.delete(cancion.id);
   erroresAudioPorId.delete(cancion.id);
+  historialAleatorio = []; // sus índices dejarían de ser válidos
   olvidarPosicion(cancion.id);
   await operarDB('readwrite', (almacen) => almacen.delete(cancion.id));
   await cargarCanciones();
@@ -1295,7 +1431,6 @@ function registrarAccionesRemotas() {
       // iOS puede enviar esta acción mientras la biblioteca aún se está leyendo
       // tras una recarga. Responder antes de tiempo provoca un play() sin gesto.
       if (!bibliotecaLista) return;
-      pausadoPorUsuario = false;
       configurarSesionDeAudio();
       // Si iOS mató la app, el elemento de audio puede no tener src: hay que
       // reconstruirlo desde IndexedDB antes de intentar reproducir.
@@ -1307,12 +1442,18 @@ function registrarAccionesRemotas() {
       if (!audio.paused) return;
       reproducirAudio()
         .then(() => {
+          pausadoPorUsuario = false;
           cancionesConError.delete(idActual);
           erroresAudioPorId.delete(idActual);
           actualizarMediaSession();
           programarFinCancion();
         })
-        .catch(() => {});
+        .catch((error) => {
+          if (esPermisoDenegado(error)) {
+            pausadoPorUsuario = true;
+            mostrarAviso('Toca el botón de reproducción para continuar.');
+          }
+        });
     },
     pause: () => {
       pausadoPorUsuario = true;
@@ -1431,6 +1572,7 @@ async function importar(archivos) {
     canciones.map((c) => claveArchivo(c.nombre, c.blob.size))
   );
   let anadidos = 0;
+  let fallidos = 0;
   let errorGuardado = null;
 
   for (let i = 0; i < listaArchivos.length; i += LOTE_IMPORTACION) {
@@ -1442,8 +1584,19 @@ async function importar(archivos) {
     });
     if (!lote.length) continue;
 
+    // Un archivo ilegible no debe impedir importar los demás del lote ni
+    // detener los lotes posteriores.
+    const resultados = await Promise.allSettled(lote.map(prepararCancion));
+    const nuevas = resultados
+      .filter((resultado) => resultado.status === 'fulfilled')
+      .map((resultado) => resultado.value);
+    fallidos += resultados.length - nuevas.length;
+    if (!errorGuardado) {
+      const rechazo = resultados.find((resultado) => resultado.status === 'rejected');
+      if (rechazo) errorGuardado = rechazo.reason;
+    }
+    if (!nuevas.length) continue;
     try {
-      const nuevas = await Promise.all(lote.map(prepararCancion));
       await guardarCanciones(nuevas);
       anadidos += nuevas.length;
     } catch (error) {
@@ -1456,9 +1609,13 @@ async function importar(archivos) {
   if (errorGuardado) {
     const esCuota = ['QuotaExceededError', 'NS_ERROR_DOM_QUOTA_REACHED']
       .includes(errorGuardado.name);
-    mostrarAviso(esCuota
-      ? 'No se pudieron guardar todas las canciones: el teléfono se ha quedado sin espacio.'
-      : `No se pudieron guardar todas las canciones: ${errorGuardado.message}`);
+    if (esCuota) {
+      mostrarAviso('No se pudieron guardar todas las canciones: el teléfono se ha quedado sin espacio.');
+    } else if (fallidos) {
+      mostrarAviso(`No se pudieron leer ${fallidos} archivo(s); se guardaron ${anadidos}.`);
+    } else {
+      mostrarAviso(`No se pudieron guardar todas las canciones: ${errorGuardado.message}`);
+    }
     return;
   }
   mostrarAviso(anadidos
@@ -1503,6 +1660,7 @@ async function eliminarDuplicados() {
     cancionesConError.delete(cancion.id);
     erroresAudioPorId.delete(cancion.id);
   });
+  historialAleatorio = []; // los índices guardados ya no apuntan a la misma canción
   if (borradas.some((cancion) => cancion.id === idActual)) detener();
   await cargarCanciones();
   mostrarAviso(`${borradas.length} canción(es) duplicada(s) eliminada(s).`);
@@ -1525,6 +1683,17 @@ entradaArchivos.addEventListener('change', async () => {
 botonDuplicados.addEventListener('click', () => {
   eliminarDuplicados()
     .catch((error) => mostrarAviso(`No se pudieron borrar los duplicados: ${error.message}`));
+});
+
+botonDiagnostico?.addEventListener('click', abrirDiagnostico);
+$('#diagnostico-cerrar')?.addEventListener('click', cerrarDiagnostico);
+$('#diagnostico-copiar')?.addEventListener('click', copiarDiagnostico);
+$('#diagnostico-limpiar')?.addEventListener('click', () => {
+  eventosDiagnostico.length = 0;
+  renderizarDiagnostico();
+});
+document.addEventListener('keydown', (evento) => {
+  if (evento.key === 'Escape' && panelDiagnostico && !panelDiagnostico.hidden) cerrarDiagnostico();
 });
 
 busqueda.addEventListener('input', () => {
@@ -1645,10 +1814,14 @@ audio.addEventListener('loadedmetadata', () => {
     cancion.duracion = audio.duration;
     const fila = filasPista.get(cancion.id);
     if (fila) actualizarFila(cancion, fila);
-    operarDB('readwrite', (almacen) => almacen.put(cancion)).catch(() => {});
-    if (ordenActual === 'duracion' && anterior !== audio.duration) {
-      aplicarFiltroYOrden();
-      renderizarBiblioteca();
+    // Reescribir el blob completo en cada reproducción es innecesario y puede
+    // agotar la cuota en silencio: solo se guarda si la duración cambió.
+    if (anterior !== audio.duration) {
+      operarDB('readwrite', (almacen) => almacen.put(cancion)).catch(() => {});
+      if (ordenActual === 'duracion') {
+        aplicarFiltroYOrden();
+        renderizarBiblioteca();
+      }
     }
   }
   programarFinCancion();
@@ -1693,6 +1866,8 @@ audio.addEventListener('error', () => {
   // iOS dispara MEDIA_ERR_ABORTED (1) al cambiar src o llamar a load().
   // No es un archivo dañado: marcarlo encadenaba avances infinitos.
   if (audio.error?.code === 1) return;
+  registrarDiagnostico('error de audio',
+    `código ${audio.error?.code} · ${idConError} · ${(audio.currentTime || 0).toFixed(1)} s`);
   cancelarFinCancion();
 
   const fallos = erroresAudioPorId.get(idConError) || 0;
@@ -1705,23 +1880,33 @@ audio.addEventListener('error', () => {
   if (fallos < 2 && cancion) {
     erroresAudioPorId.set(idConError, fallos + 1);
     configurarSesionDeAudio();
-    reproducir(cancion, { reanudar: true, conFundido: false });
+    // Una llamada o Siri retienen el foco unos instantes: esperar antes de
+    // reintentar evita descartar una pista válida por un fallo momentáneo.
+    setTimeout(() => {
+      if (idActual === idConError) reproducir(cancion, { reanudar: true, conFundido: false });
+    }, 1200);
     return;
   }
 
   erroresAudioPorId.set(idConError, fallos + 1);
-  cancionesConError.add(idConError);
   historialAleatorio = [];
   olvidarPosicion(idConError);
   mostrarAviso(audio.currentTime > 2
     ? 'Se interrumpió la reproducción; se pasa al siguiente.'
     : 'No se pudo leer este archivo; se pasa al siguiente.');
+  // Con "repetir una" hay que marcar antes: de lo contrario la rama 'one'
+  // volvería a elegir la canción dañada. En los demás modos se marca después,
+  // para que cambiarPista() calcule el destino con la cola todavía sin filtrar.
+  if (modoRepeticion === 'one') cancionesConError.add(idConError);
   avanzarAlSiguiente();
+  if (modoRepeticion !== 'one') cancionesConError.add(idConError);
 });
 
 // iOS suspende la app al bloquear la pantalla y puede pausar el audio. Al volver
 // hay que reanudarla, pero solo si la pausa no fue decidida por la persona.
 document.addEventListener('visibilitychange', () => {
+  registrarDiagnostico('pantalla',
+    `${document.visibilityState} · ${(audio.currentTime || 0).toFixed(1)} s`);
   if (document.visibilityState === 'hidden') {
     guardarPosicion({ forzar: true });
     configurarSesionDeAudio();
@@ -1737,13 +1922,25 @@ document.addEventListener('visibilitychange', () => {
     return;
   }
   if (audio.paused && idActual && !pausadoPorUsuario) {
+    // iOS puede descartar el src al suspender la página: sin él, play() falla
+    // en silencio y la música no vuelve al abrir la app.
+    if (!audio.src) {
+      const cancion = cancionActual() || colaReproduccion()[0];
+      if (cancion) reproducir(cancion, { reanudar: true });
+      return;
+    }
     // Pausa impuesta por el sistema: continuar sin recargar el archivo.
     reproducirAudio()
       .then(() => {
         actualizarMediaSession();
         programarFinCancion();
       })
-      .catch(() => {});
+      .catch((error) => {
+        if (esPermisoDenegado(error)) {
+          pausadoPorUsuario = true;
+          mostrarAviso('Toca el botón de reproducción para continuar.');
+        }
+      });
     return;
   }
   if (!audio.paused) programarFinCancion();

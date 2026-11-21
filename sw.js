@@ -1,7 +1,7 @@
 /* Service worker: solo cachea la "cáscara" de la app (HTML/CSS/JS/iconos).
    El audio NO pasa por aquí: vive en IndexedDB dentro del teléfono. */
 
-const VERSION = 'reproductor-shell-v19';
+const VERSION = 'reproductor-shell-v20';
 // Cachés de versiones anteriores, antes de que llevaran prefijo propio
 const CACHES_ANTIGUAS = ['shell-v5', 'shell-v6', 'shell-v7'];
 const SHELL = [
@@ -55,7 +55,11 @@ self.addEventListener('fetch', (evento) => {
           }
           return respuesta;
         })
-        .catch(() => caches.match('./index.html'));
+        // Solo las navegaciones pueden caer al HTML: devolverlo para un CSS o
+        // una imagen produce errores de MIME difíciles de diagnosticar.
+        .catch(() => (evento.request.mode === 'navigate'
+          ? caches.match('./index.html')
+          : Response.error()));
     })
   );
 });

@@ -38,6 +38,16 @@ python3 -m http.server 8080
 
 y abre `http://localhost:8080` (Safari trata `localhost` como seguro).
 
+### Comprobaciones y diagnóstico
+
+```bash
+node tests/regresion.js
+```
+
+Ejecuta las pruebas de regresión de reproducción sin instalar dependencias.
+
+Si aparece un error de audio, abre el icono **i** de la cabecera: ahí se anotan los fallos (código, momento y estado de la pantalla). Pulsa **Copiar** y pega el texto al pedir ayuda; el registro no sale del teléfono.
+
 ## Qué hace
 
 - Importa mp3/m4a/aac/wav/ogg/flac/aiff desde Archivos y los guarda dentro del teléfono.
@@ -72,5 +82,6 @@ app.js                IndexedDB, ID3, reproductor, Media Session
 sw.js                 Caché del shell offline
 manifest.webmanifest  Instalación como app
 icons/                Iconos 192/512/apple-touch generados desde icon.svg
+tests/regresion.js    Pruebas sin dependencias (node tests/regresion.js)
 README.md             Este archivo
 ```
