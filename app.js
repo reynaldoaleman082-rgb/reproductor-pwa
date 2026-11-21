@@ -221,8 +221,6 @@ function actualizarBotonesModos() {
       );
     }
   }
-  const selectorDuracion = $('#duracion-fundido');
-  if (selectorDuracion) selectorDuracion.value = String(duracionFundido);
 }
 
 function alternarRepeticion() {
@@ -1726,22 +1724,9 @@ $('#gran-anterior').addEventListener('click', anterior);
 $('#boton-siguiente').addEventListener('click', () => cambiarPista(1));
 $('#gran-siguiente').addEventListener('click', () => cambiarPista(1));
 
-for (const selector of ['#mini-aleatorio', '#gran-aleatorio']) {
-  $(selector).addEventListener('click', alternarAleatorio);
-}
-for (const selector of ['#mini-repeticion', '#gran-repeticion']) {
-  $(selector).addEventListener('click', alternarRepeticion);
-}
-for (const selector of ['#mini-fundido', '#gran-fundido']) {
-  $(selector).addEventListener('click', alternarFundido);
-}
-$('#duracion-fundido').addEventListener('change', (evento) => {
-  const valor = Number(evento.target.value);
-  duracionFundido = DURACIONES_FUNDIDO.includes(valor) ? valor : 4;
-  guardarPreferencias();
-  actualizarBotonesModos();
-  mostrarAviso(`Fundido de ${duracionFundido} s`);
-});
+$('#mini-aleatorio').addEventListener('click', alternarAleatorio);
+$('#mini-repeticion').addEventListener('click', alternarRepeticion);
+$('#mini-fundido').addEventListener('click', alternarFundido);
 
 $('#abrir-pantalla').addEventListener('click', abrirPantalla);
 $('#cerrar-pantalla').addEventListener('click', cerrarPantalla);

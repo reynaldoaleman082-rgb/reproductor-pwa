@@ -340,6 +340,17 @@ async function simularFundido({ doble = false, cancelar = false } = {}) {
     /evento\.request\.mode === 'navigate'/.test(
       fs.readFileSync(path.join(__dirname, '..', 'sw.js'), 'utf8')));
 
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  comprobar('aleatorio, repetir y fundido solo están en el mini reproductor',
+    /mini-aleatorio/.test(html) && /mini-repeticion/.test(html) && /mini-fundido/.test(html) &&
+    !/gran-aleatorio|gran-repeticion|gran-fundido|duracion-fundido/.test(html));
+  comprobar('el JS no referencia los controles de modos del overlay',
+    !/gran-aleatorio|gran-repeticion|gran-fundido|duracion-fundido/.test(fuente));
+
+  const css = fs.readFileSync(path.join(__dirname, '..', 'styles.css'), 'utf8');
+  comprobar('los modos del mini no se ocultan en pantallas estrechas',
+    !/\.mini\s+\.boton-icono--modo\s*\{[^}]*display:\s*none/.test(css));
+
   const vSinSrc = simularVisibilidad({ src: '' });
   comprobar('volver con el src perdido reconstruye la canción',
     vSinSrc.reconstruidas === 1 && vSinSrc.play === 0 && vSinSrc.avances === 0);
