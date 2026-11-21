@@ -106,7 +106,7 @@ function simularErrorAudio({
 function simularVisibilidad({
   estado = 'visible', pausadoPorUsuario = false, paused = true,
   currentTime = 30, duration = 200, ended = false, idActual = 'c1',
-  src = 'blob:audio', falloPlay = null
+  src = 'blob:audio', falloPlay = null, fundidoEnCurso = false
 } = {}) {
   const cuerpo = extraerCuerpo(
     /document\.addEventListener\('visibilitychange', \(\) => \{([\s\S]*?)\n\}\);/,
@@ -114,14 +114,14 @@ function simularVisibilidad({
   );
   const registro = {
     guardo: 0, sesiones: 0, play: 0, avances: 0, timers: 0,
-    reconstruidas: 0, avisos: []
+    reconstruidas: 0, cancelaciones: 0, avisos: []
   };
   const manejador = new Function(
     'document', 'audio', 'idActual', 'pausadoPorUsuario',
     'guardarPosicion', 'configurarSesionDeAudio', 'cancelarFinCancion',
     'avanzarAlSiguiente', 'reproducirAudio', 'actualizarMediaSession', 'programarFinCancion',
     'registrarDiagnostico', 'cancionActual', 'colaReproduccion', 'reproducir',
-    'esPermisoDenegado', 'mostrarAviso',
+    'esPermisoDenegado', 'mostrarAviso', 'fundidoEnCurso', 'cancelarFundido',
     'const manejador = () => {' + cuerpo + '\n}; manejador();'
   );
   manejador(
@@ -146,7 +146,9 @@ function simularVisibilidad({
     () => [{ id: 'c1' }],
     () => { registro.reconstruidas += 1; },
     (error) => error?.name === 'NotAllowedError',
-    (mensaje) => registro.avisos.push(mensaje)
+    (mensaje) => registro.avisos.push(mensaje),
+    fundidoEnCurso,
+    () => { registro.cancelaciones += 1; }
   );
   return registro;
 }
@@ -183,7 +185,7 @@ function simularCambioDePista({
 // ---------------------------------------------------------------------------
 // 5. Fundido: serialize cambios y aplicar el pendiente si se cancela
 // ---------------------------------------------------------------------------
-async function simularFundido({ doble = false, cancelar = false } = {}) {
+async function simularFundido({ doble = false, cancelar = false, oculto = false } = {}) {
   const bloques = [
     extraerBloque(/function cambiarConFundido\(hacerCambio\) \{[\s\S]*?\n\}/, 'cambiarConFundido'),
     extraerBloque(/function ejecutarConFundido\(hacerCambio\) \{[\s\S]*?\n\}/, 'ejecutarConFundido'),
@@ -234,8 +236,9 @@ async function simularFundido({ doble = false, cancelar = false } = {}) {
       ponerId: (valor) => { idActual = valor; }
     };
   `;
-  const api = new Function('audio', 'setTimeout', 'clearTimeout', cuerpo)(
-    audio, temporizadorFalso, limpiarTemporizador
+  const documento = { visibilityState: oculto ? 'hidden' : 'visible' };
+  const api = new Function('audio', 'document', 'setTimeout', 'clearTimeout', cuerpo)(
+    audio, documento, temporizadorFalso, limpiarTemporizador
   );
   const cambiarA = (id) => () => {
     api.ponerId(id);
@@ -251,7 +254,7 @@ async function simularFundido({ doble = false, cancelar = false } = {}) {
   if (cancelar) api.cancelarFundido();
   await vaciarTemporizadores();
   await Promise.all(promesas);
-  return { id: api.obtenerId(), volumen: audio.volume };
+  return { id: api.obtenerId(), volumen: audio.volume, temporizadores: temporizadores.size };
 }
 
 // ---------------------------------------------------------------------------
@@ -285,7 +288,11 @@ async function simularFundido({ doble = false, cancelar = false } = {}) {
 
   const vOculto = simularVisibilidad({ estado: 'hidden' });
   comprobar('pantalla apagada: guarda posición y reafirma sesión',
-    vOculto.guardo === 1 && vOculto.sesiones === 1 && vOculto.play === 0);
+    vOculto.guardo === 1 && vOculto.sesiones === 1 && vOculto.play === 0 &&
+    vOculto.cancelaciones === 0);
+  const vFundido = simularVisibilidad({ estado: 'hidden', fundidoEnCurso: true });
+  comprobar('pantalla apagada a mitad de fundido: lo cancela',
+    vFundido.cancelaciones === 1 && vFundido.guardo === 1);
   const vSistema = simularVisibilidad();
   comprobar('volver con pausa del sistema: reanuda', vSistema.play === 1 && vSistema.avances === 0);
   const vUsuario = simularVisibilidad({ pausadoPorUsuario: true });
@@ -328,6 +335,10 @@ async function simularFundido({ doble = false, cancelar = false } = {}) {
     fuente.includes('const resultado = colaFundido.then(() => ejecutarConFundido(hacerCambio));'));
   comprobar('cancelar el fundido aplica el cambio pendiente',
     /fundidoCancelado = true;\s*cancelarBajadaFundido\(\);/.test(fuente));
+  comprobar('en segundo plano se cambia de pista sin fundido',
+    /if \(document\.visibilityState === 'hidden'\) \{\s*registrarDiagnostico\('audio', 'segundo plano: cambio sin fundido'\);\s*return reproducirAhora\(cancion, \{ reanudar \}\);/.test(fuente));
+  comprobar('ocultar la pantalla a mitad de fundido lo cancela',
+    /if \(fundidoEnCurso\) cancelarFundido\(\);/.test(fuente));
   comprobar('la canción dañada se marca después de elegir el destino',
     /avanzarAlSiguiente\(\);\s*if \(modoRepeticion !== 'one'\) cancionesConError\.add\(idConError\);/.test(fuente));
   comprobar('el historial aleatorio guarda ids, no índices',
@@ -397,8 +408,8 @@ async function simularFundido({ doble = false, cancelar = false } = {}) {
     fuente.includes("oscuro ? '#241A16' : '#FFF6EC'"));
 
   const sw = fs.readFileSync(path.join(__dirname, '..', 'sw.js'), 'utf8');
-  comprobar('el service worker cachea la versión 25',
-    /const VERSION = 'reproductor-shell-v25';/.test(sw));
+  comprobar('el service worker cachea la versión 26',
+    /const VERSION = 'reproductor-shell-v26';/.test(sw));
 
   const vSinSrc = simularVisibilidad({ src: '' });
   comprobar('volver con el src perdido reconstruye la canción',
@@ -416,6 +427,10 @@ async function simularFundido({ doble = false, cancelar = false } = {}) {
   const fundidoCortado = await simularFundido({ cancelar: true });
   comprobar('apagar el fundido a media bajada aplica el cambio pendiente',
     fundidoCortado.id === 'B' && fundidoCortado.volumen === 1);
+  const fundidoOculto = await simularFundido({ oculto: true });
+  comprobar('en segundo plano cambia sin timers y con volumen intacto',
+    fundidoOculto.id === 'B' && fundidoOculto.volumen === 1 &&
+    fundidoOculto.temporizadores === 0);
 
   terminar();
 })();

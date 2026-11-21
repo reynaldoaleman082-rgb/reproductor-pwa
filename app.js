@@ -982,7 +982,9 @@ function cancelarFundido() {
 // Las transiciones se encolan: un doble toque no ejecuta dos cambios ni puede
 // acabar reproduciendo la canción elegida primero.
 function cambiarConFundido(hacerCambio) {
-  if (!fundidoActivo) return Promise.resolve(hacerCambio());
+  if (!fundidoActivo || document.visibilityState === 'hidden') {
+    return Promise.resolve(hacerCambio());
+  }
   const resultado = colaFundido.then(() => ejecutarConFundido(hacerCambio));
   colaFundido = resultado.catch(() => {});
   return resultado;
@@ -1013,7 +1015,7 @@ function ejecutarConFundido(hacerCambio) {
   };
 
   const subir = () => {
-    if (fundidoCancelado) {
+    if (fundidoCancelado || document.visibilityState === 'hidden') {
       limpiar();
       return;
     }
@@ -1054,6 +1056,11 @@ function ejecutarConFundido(hacerCambio) {
       resolver(cambiarYSubir());
     };
     const bajar = () => {
+      if (document.visibilityState === 'hidden') {
+        if (cancelarBajadaFundido) cancelarBajadaFundido();
+        else limpiar();
+        return;
+      }
       paso += 1;
       audio.volume = Math.max(0, volumenAntesDelFundido * (1 - paso / pasos));
       if (paso < pasos) {
@@ -1068,6 +1075,13 @@ function ejecutarConFundido(hacerCambio) {
 
 function reproducir(cancion, { reanudar = false, conFundido = true } = {}) {
   if (!cancion) return Promise.resolve();
+  // En segundo plano iOS congela los setTimeout del fundido: si se baja el
+  // volumen a 0 aquí, la pista nueva "suena" en la interfaz pero no se oye
+  // hasta que la app vuelve y los timers se reanudan.
+  if (document.visibilityState === 'hidden') {
+    registrarDiagnostico('audio', 'segundo plano: cambio sin fundido');
+    return reproducirAhora(cancion, { reanudar });
+  }
   if (!conFundido) return reproducirAhora(cancion, { reanudar });
   return cambiarConFundido(() => reproducirAhora(cancion, { reanudar }));
 }
@@ -1889,6 +1903,9 @@ document.addEventListener('visibilitychange', () => {
   registrarDiagnostico('pantalla',
     `${document.visibilityState} · ${(audio.currentTime || 0).toFixed(1)} s`);
   if (document.visibilityState === 'hidden') {
+    // Si se oculta la pantalla a mitad de fundido, terminar el cambio ya:
+    // los timers que suben el volumen dejarían de ejecutarse en segundo plano.
+    if (fundidoEnCurso) cancelarFundido();
     guardarPosicion({ forzar: true });
     configurarSesionDeAudio();
     return;
