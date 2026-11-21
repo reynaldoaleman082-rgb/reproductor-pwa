@@ -78,6 +78,15 @@
 
   <div class="app">
     <header class="cabecera">
+      <label id="buscador" class="buscador" hidden>
+        <span class="sr-only">Buscar canción o artista</span>
+        <svg class="icono icono--sm" aria-hidden="true"><use href="#i-buscar"></use></svg>
+        <input id="busqueda" type="search" inputmode="search" autocomplete="off"
+               placeholder="Buscar canción o artista" aria-label="Buscar canción o artista">
+        <button id="limpiar-busqueda" class="buscador__limpiar" type="button" aria-label="Borrar búsqueda" hidden>
+          <svg class="icono icono--sm" aria-hidden="true"><use href="#i-x"></use></svg>
+        </button>
+      </label>
       <div class="cabecera__acciones">
         <button id="boton-diagnostico" class="boton boton--secundario" type="button"
                 aria-label="Ver diagnóstico de reproducción" title="Diagnóstico">
@@ -94,16 +103,9 @@
     </header>
 
     <main class="contenido">
-      <section id="herramientas" class="herramientas" hidden aria-label="Herramientas de la biblioteca">
+      <section id="herramientas" class="herramientas" hidden aria-label="Ordenar biblioteca">
         <div class="herramientas__filtros">
-          <label class="buscador">
-            <svg class="icono icono--sm" aria-hidden="true"><use href="#i-buscar"></use></svg>
-            <input id="busqueda" type="search" inputmode="search" autocomplete="off"
-                   placeholder="Buscar canción o artista" aria-label="Buscar canción o artista">
-            <button id="limpiar-busqueda" class="buscador__limpiar" type="button" aria-label="Borrar búsqueda" hidden>
-              <svg class="icono icono--sm" aria-hidden="true"><use href="#i-x"></use></svg>
-            </button>
-          </label>
+          <span class="herramientas__etiqueta">Ordenar por</span>
           <select id="orden" class="orden" aria-label="Ordenar biblioteca">
             <option value="fecha">Más recientes</option>
             <option value="titulo">Por título</option>

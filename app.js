@@ -20,6 +20,7 @@ const tiempoTotal = $('#tiempo-total');
 const contenido = $('.contenido');
 const portada = $('.portada');
 const herramientas = $('#herramientas');
+const buscador = $('#buscador');
 const busqueda = $('#busqueda');
 const limpiarBusqueda = $('#limpiar-busqueda');
 const orden = $('#orden');
@@ -693,6 +694,7 @@ function renderizarBiblioteca({ animar = false } = {}) {
 
   idPistaResaltada = idActual;
   vistaVacia.hidden = canciones.length > 0;
+  buscador.hidden = canciones.length === 0;
   herramientas.hidden = canciones.length === 0;
   lista.hidden = cancionesVisibles.length === 0;
   sinResultados.hidden = !(

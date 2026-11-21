@@ -11,21 +11,24 @@
   --sobre-acento: #241A16;
   --sobre-degradado: #241A16;
   --borde: #6E4533;
+  --durazno: #F4A261;
+  --durazno-linea: #F4A261;
+  --durazno-suave: #6B4030;
+  --durazno-borde: #C97A4A;
+  --durazno-texto: #FFD9BC;
+  --durazno-tenue: rgba(244, 162, 97, .08);
 
   /* Capas y realces: cambian con el tema del dispositivo */
-  --velo: rgba(36, 26, 22, .66);
-  --velo-fuerte: rgba(36, 26, 22, .92);
+  --velo: rgba(107, 64, 48, .66);
+  --velo-fuerte: rgba(36, 26, 22, .94);
   --brillo-sutil: rgba(255, 246, 234, .07);
   --brillo-medio: rgba(255, 246, 234, .12);
   --brillo-track: rgba(255, 246, 234, .16);
   --brillo-resalte: rgba(255, 246, 234, .7);
   --brillo-inset: rgba(255, 246, 234, .08);
   --resplandor-calido: #8A4A2B;
-  --resplandor-calido-suave: #4A2D22;
-  --acento-tenue: rgba(233, 162, 59, .18);
   --acento2-tenue: rgba(246, 196, 83, .16);
   --acento2-borde: rgba(246, 196, 83, .5);
-  --acento2-traza: rgba(246, 196, 83, .10);
   --acento2-sombras: rgba(246, 196, 83, .28);
   --acento2-anillo: rgba(246, 196, 83, .22);
   --acento2-activo: #FFD166;
@@ -56,13 +59,19 @@
     --superficie-2: #FBE9D9;
     --texto: #2A1A13;
     --secundario: #6B4A38;
-    --acento: #9A5B00;
+    --acento: #E9A23B;
     --acento-2: #8A4E00;
     --sobre-acento: #FFFFFF;
-    --sobre-degradado: #FFFFFF;
+    --sobre-degradado: #2A1A13;
     --borde: #E8CDB8;
+    --durazno: #F4A261;
+    --durazno-linea: #A84612;
+    --durazno-suave: #FFE2CC;
+    --durazno-borde: #C2703B;
+    --durazno-texto: #6B3214;
+    --durazno-tenue: rgba(196, 112, 59, .07);
 
-    --velo: rgba(255, 246, 236, .86);
+    --velo: rgba(255, 226, 204, .88);
     --velo-fuerte: rgba(255, 246, 236, .97);
     --brillo-sutil: rgba(42, 26, 19, .06);
     --brillo-medio: rgba(42, 26, 19, .10);
@@ -70,11 +79,8 @@
     --brillo-resalte: rgba(255, 255, 255, .95);
     --brillo-inset: rgba(42, 26, 19, .07);
     --resplandor-calido: #FFE0C2;
-    --resplandor-calido-suave: #FDE3CF;
-    --acento-tenue: rgba(154, 91, 0, .10);
     --acento2-tenue: rgba(138, 78, 0, .12);
     --acento2-borde: rgba(138, 78, 0, .5);
-    --acento2-traza: rgba(138, 78, 0, .08);
     --acento2-sombras: rgba(138, 78, 0, .22);
     --acento2-anillo: rgba(138, 78, 0, .18);
     --acento2-activo: #7A4300;
@@ -93,6 +99,9 @@
 }
 
 * { box-sizing: border-box; }
+
+/* Los estilos explícitos de display no deben anular el atributo hidden */
+[hidden] { display: none !important; }
 
 html, body {
   margin: 0;
@@ -115,6 +124,17 @@ button { font: inherit; color: inherit; }
 
 /* El sprite no ocupa espacio: solo define los símbolos SVG */
 .sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
 .icono {
   width: 24px;
   height: 24px;
@@ -141,7 +161,7 @@ button { font: inherit; color: inherit; }
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: space-between;
   gap: 12px;
   padding: calc(env(safe-area-inset-top, 0px) + 14px) 18px 12px;
   background: var(--velo);
@@ -155,7 +175,7 @@ button { font: inherit; color: inherit; }
   background: var(--velo-fuerte);
   box-shadow: var(--sombra-cabecera);
 }
-.cabecera__acciones { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+.cabecera__acciones { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; margin-left: auto; }
 #boton-importar { width: 44px; padding: 0; }
 
 .boton {
@@ -174,7 +194,10 @@ button { font: inherit; color: inherit; }
   font-weight: 600;
   transition: transform var(--tiempo) var(--curva), filter var(--tiempo) var(--curva);
 }
-.boton--primario { background: var(--acento); color: var(--sobre-degradado); }
+.boton--primario {
+  background: linear-gradient(135deg, var(--durazno), var(--acento));
+  color: var(--sobre-degradado);
+}
 .boton--secundario {
   width: 44px;
   padding: 0;
@@ -209,8 +232,24 @@ button { font: inherit; color: inherit; }
 }
 
 /* ------------------------------------------------------------ herramientas */
-.herramientas { display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; }
-.herramientas__filtros { display: flex; gap: 8px; }
+.herramientas { margin-bottom: 12px; }
+.herramientas__filtros {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 0 4px 0 14px;
+  border-radius: 14px;
+  border: 1px solid var(--durazno-borde);
+  background: var(--durazno-suave);
+}
+.herramientas__etiqueta {
+  flex: 0 0 auto;
+  color: var(--durazno-texto);
+  font-size: 12px;
+  font-weight: 600;
+}
+
 .buscador {
   position: relative;
   flex: 1 1 auto;
@@ -219,11 +258,11 @@ button { font: inherit; color: inherit; }
   align-items: center;
   gap: 8px;
   min-height: 44px;
-  padding: 0 6px 0 14px;
+  padding: 0 4px 0 14px;
   border-radius: 999px;
-  border: 1px solid var(--borde);
-  background: var(--superficie);
-  color: var(--secundario);
+  border: 1px solid var(--durazno-borde);
+  background: var(--durazno-suave);
+  color: var(--durazno-texto);
 }
 .buscador input {
   flex: 1 1 auto;
@@ -238,7 +277,7 @@ button { font: inherit; color: inherit; }
   -webkit-appearance: none;
   appearance: none;
 }
-.buscador input::placeholder { color: var(--secundario); opacity: .85; }
+.buscador input::placeholder { color: var(--durazno-texto); opacity: .9; }
 /* iOS dibuja su propia X: usamos nuestro botón, que tiene 44 pt de área táctil */
 .buscador input::-webkit-search-cancel-button { -webkit-appearance: none; appearance: none; }
 .buscador__limpiar {
@@ -248,19 +287,20 @@ button { font: inherit; color: inherit; }
   border: 0;
   border-radius: 50%;
   background: none;
-  color: var(--secundario);
+  color: var(--durazno-texto);
   display: grid;
   place-items: center;
   cursor: pointer;
 }
-.buscador__limpiar:active { color: var(--texto); background: var(--superficie-2); }
+.buscador__limpiar:active { color: var(--texto); background: var(--durazno-borde); }
 .orden {
-  flex: 0 0 auto;
-  max-width: 132px;
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 200px;
   min-height: 44px;
-  padding: 0 10px;
+  padding: 0 12px;
   border-radius: 999px;
-  border: 1px solid var(--borde);
+  border: 1px solid var(--durazno-borde);
   background: var(--superficie);
   color: var(--texto);
   font: inherit;
@@ -288,9 +328,9 @@ button { font: inherit; color: inherit; }
   height: 96px;
   margin: 0 auto 14px;
   border-radius: 30px;
-  background: linear-gradient(135deg, var(--acento-tenue), var(--acento2-tenue));
-  border: 1px solid var(--borde);
-  color: var(--acento-2);
+  background: linear-gradient(135deg, var(--durazno), var(--acento));
+  border: 1px solid var(--durazno-borde);
+  color: var(--sobre-degradado);
   animation: flotar 3.6s ease-in-out infinite;
 }
 .vacio__icono .icono { width: 44px; height: 44px; }
@@ -306,7 +346,7 @@ button { font: inherit; color: inherit; }
   min-width: 0;
   padding: 8px;
   border-radius: var(--radio);
-  background: var(--superficie);
+  background: linear-gradient(120deg, var(--superficie), var(--durazno-tenue));
   border: 1px solid var(--borde);
   /* El navegador salta el pintado de las filas fuera de pantalla en listas largas */
   content-visibility: auto;
@@ -315,8 +355,8 @@ button { font: inherit; color: inherit; }
 }
 .pista:active { background: var(--superficie-2); }
 .pista.is-actual {
-  border-color: var(--acento2-borde);
-  background: linear-gradient(90deg, var(--acento2-traza), var(--superficie) 55%);
+  border-color: var(--durazno-borde);
+  background: linear-gradient(90deg, var(--durazno-tenue), var(--superficie) 60%);
 }
 .pista--entrando {
   animation: subir-fila 380ms var(--curva) both;
@@ -360,8 +400,8 @@ button { font: inherit; color: inherit; }
   display: grid;
   place-items: center;
   flex: 0 0 auto;
-  background: linear-gradient(135deg, var(--resplandor-calido), var(--superficie));
-  color: var(--acento-2);
+  background: linear-gradient(135deg, var(--durazno), var(--resplandor-calido));
+  color: var(--sobre-degradado);
 }
 .pista__caratula-vacia .icono,
 .mini__caratula-vacia .icono { width: 22px; height: 22px; }
@@ -463,7 +503,7 @@ body:not(.esta-sonando) .pista__ecualizador i { animation-play-state: paused; }
   display: block;
   width: 0;
   height: 100%;
-  background: linear-gradient(90deg, var(--acento), var(--acento-2));
+  background: linear-gradient(90deg, var(--durazno-linea), var(--acento));
   transition: width 120ms linear;
 }
 .mini__progreso span::after {
@@ -596,8 +636,8 @@ body.esta-sonando .boton-icono--principal::before { animation: pulso 2.4s ease-o
   height: 100%;
   display: grid;
   place-items: center;
-  color: var(--acento-2);
-  background: linear-gradient(135deg, var(--resplandor-calido), var(--resplandor-calido-suave));
+  color: var(--sobre-degradado);
+  background: linear-gradient(135deg, var(--durazno), var(--resplandor-calido));
 }
 .portada__vacia .icono { width: 88px; height: 88px; stroke-width: 1.4; }
 
@@ -627,7 +667,7 @@ body.esta-sonando .boton-icono--principal::before { animation: pulso 2.4s ease-o
   height: 6px;
   border-radius: 3px;
   background: linear-gradient(90deg,
-    var(--acento-2) var(--progreso), var(--brillo-track) var(--progreso));
+    var(--durazno-linea), var(--acento) var(--progreso), var(--brillo-track) var(--progreso));
 }
 .barra-progreso input::-webkit-slider-thumb {
   -webkit-appearance: none;
@@ -635,21 +675,21 @@ body.esta-sonando .boton-icono--principal::before { animation: pulso 2.4s ease-o
   height: 20px;
   margin-top: -7px;
   border-radius: 50%;
-  background: var(--acento-2);
+  background: var(--durazno-linea);
   box-shadow: 0 0 0 4px var(--acento2-anillo);
 }
 .barra-progreso input::-moz-range-track {
   height: 6px;
   border-radius: 3px;
   background: linear-gradient(90deg,
-    var(--acento-2) var(--progreso), var(--brillo-track) var(--progreso));
+    var(--durazno-linea), var(--acento) var(--progreso), var(--brillo-track) var(--progreso));
 }
 .barra-progreso input::-moz-range-thumb {
   width: 20px;
   height: 20px;
   border: 0;
   border-radius: 50%;
-  background: var(--acento-2);
+  background: var(--durazno-linea);
 }
 .barra-progreso__tiempos {
   display: flex;

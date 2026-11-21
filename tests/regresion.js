@@ -352,10 +352,23 @@ async function simularFundido({ doble = false, cancelar = false } = {}) {
   comprobar('ningún token de tema se autorreferencia',
     !/--([\w-]+):\s*var\(\s*\1\s*\)/.test(css));
 
-  comprobar('la cabecera solo conserva los botones de acción',
+  const cabecera = /<header class="cabecera">([\s\S]*?)<\/header>/.exec(html)?.[1] || '';
+  comprobar('el buscador ocupa el espacio vacío de la cabecera',
+    /id="buscador"/.test(cabecera) &&
+    cabecera.indexOf('id="buscador"') < cabecera.indexOf('cabecera__acciones') &&
+    /id="busqueda"/.test(cabecera) &&
+    /class="sr-only">Buscar canción o artista</.test(cabecera));
+  comprobar('la cabecera ya no muestra título, icono musical ni almacenamiento',
     !/cabecera__titulo|cabecera__icono|cabecera__estado|Mi música|Calculando espacio|estado-almacenamiento|<span>Importar<\/span>/.test(html) &&
     /id="boton-importar"[^>]*aria-label="Importar canciones"/.test(html) &&
     /<use href="#i-mas"><\/use>/.test(html));
+  const herramientasHtml = /<section id="herramientas"[\s\S]*?<\/section>/.exec(html)?.[0] || '';
+  comprobar('el orden queda en su propia barra, sin el buscador',
+    !/id="busqueda"|id="limpiar-busqueda"/.test(herramientasHtml) &&
+    /id="orden"/.test(herramientasHtml) &&
+    /class="herramientas__etiqueta">Ordenar por</.test(herramientasHtml));
+  comprobar('el buscador se oculta cuando no hay biblioteca',
+    /buscador\.hidden = canciones\.length === 0;/.test(fuente));
   comprobar('el JS ya no muestra el almacenamiento utilizado',
     !/estadoAlmacenamiento|mostrarEspacio|MB usados|GB disponibles/.test(fuente));
   comprobar('el botón de importar sigue siendo un objetivo táctil de 44 px',
@@ -366,6 +379,14 @@ async function simularFundido({ doble = false, cancelar = false } = {}) {
     !/#4338ca|#22c55e|#6366f1|#0f0f23|#f8fafc|#15803d/i.test(css));
   comprobar('no quedan tokens con nombres de la paleta anterior',
     !/--verde-|--resplandor-indigo|--degradado-acento|--acento-sombras/.test(css));
+  comprobar('el durazno se ve en superficies, botones y progreso',
+    /--durazno: #F4A261;/.test(css) &&
+    /--durazno-suave: #6B4030;/.test(css) &&
+    /--durazno-suave: #FFE2CC;/.test(css) &&
+    /background: linear-gradient\(135deg, var\(--durazno\), var\(--acento\)\);/.test(css) &&
+    /background: linear-gradient\(90deg, var\(--durazno-linea\), var\(--acento\)\);/.test(css));
+  comprobar('el atributo hidden gana sobre cualquier display',
+    /\[hidden\] \{ display: none !important; \}/.test(css));
 
   const manifiesto = JSON.parse(fs.readFileSync(
     path.join(__dirname, '..', 'manifest.webmanifest'), 'utf8'));
@@ -376,8 +397,8 @@ async function simularFundido({ doble = false, cancelar = false } = {}) {
     fuente.includes("oscuro ? '#241A16' : '#FFF6EC'"));
 
   const sw = fs.readFileSync(path.join(__dirname, '..', 'sw.js'), 'utf8');
-  comprobar('el service worker cachea la versión 24',
-    /const VERSION = 'reproductor-shell-v24';/.test(sw));
+  comprobar('el service worker cachea la versión 25',
+    /const VERSION = 'reproductor-shell-v25';/.test(sw));
 
   const vSinSrc = simularVisibilidad({ src: '' });
   comprobar('volver con el src perdido reconstruye la canción',
