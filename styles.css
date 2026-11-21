@@ -240,7 +240,6 @@ button { font: inherit; color: inherit; }
 /* ------------------------------------------------------------ herramientas */
 .herramientas { display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; }
 .herramientas__filtros { display: flex; gap: 8px; }
-.reproducir-todo { width: 100%; }
 .buscador {
   position: relative;
   flex: 1 1 auto;

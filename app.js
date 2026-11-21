@@ -23,7 +23,6 @@ const limpiarBusqueda = $('#limpiar-busqueda');
 const orden = $('#orden');
 const sinResultados = $('#sin-resultados');
 const botonDuplicados = $('#boton-duplicados');
-const reproducirTodo = $('#reproducir-todo');
 const metaTema = $('#meta-tema');
 const consultaTemaOscuro = window.matchMedia
   ? window.matchMedia('(prefers-color-scheme: dark)')
@@ -67,6 +66,9 @@ const erroresAudioPorId = new Map(); // id -> fallos de carga en esta sesión ( 
 let idCargando = null; // id del audio cuyo src se está cargando
 let avanzando = false; // evita cadenas de avance por errores transitorios
 let bibliotecaLista = false; // la carga inicial terminó: ya se puede responder a controles remotos
+// Arranca en true: tras recargar no se reanuda nada sin que la persona dé play.
+// Solo se pone en false cuando la reproducción es intencionada.
+let pausadoPorUsuario = true;
 let temporizadorAviso;
 let temporizadorSalidaAviso;
 let temporizadorFinCancion;
@@ -980,6 +982,7 @@ function reproducirAhora(cancion, { reanudar = false } = {}) {
   // Safari/iOS necesita load() tras cambiar src para encadenar la siguiente pista.
   audio.load();
   idActual = cancion.id;
+  pausadoPorUsuario = false;
   guardarIdActual(idActual);
   const idReproducido = cancion.id;
   const guardada = reanudar ? Number(posicionesGuardadas[cancion.id]) || 0 : 0;
@@ -1058,6 +1061,7 @@ function alternar() {
     return;
   }
   if (audio.paused) {
+    pausadoPorUsuario = false;
     configurarSesionDeAudio();
     reproducirAudio()
       .then(() => {
@@ -1070,6 +1074,7 @@ function alternar() {
         if (!esPermisoDenegado(error)) mostrarAviso(error.message);
       });
   } else {
+    pausadoPorUsuario = true;
     audio.pause();
   }
 }
@@ -1156,6 +1161,7 @@ function anterior() {
 function detener() {
   cancelarFinCancion();
   cancelarFundido();
+  pausadoPorUsuario = true;
   idActual = null;
   guardarIdActual(null);
   posicionPendiente = null;
@@ -1289,6 +1295,7 @@ function registrarAccionesRemotas() {
       // iOS puede enviar esta acción mientras la biblioteca aún se está leyendo
       // tras una recarga. Responder antes de tiempo provoca un play() sin gesto.
       if (!bibliotecaLista) return;
+      pausadoPorUsuario = false;
       configurarSesionDeAudio();
       // Si iOS mató la app, el elemento de audio puede no tener src: hay que
       // reconstruirlo desde IndexedDB antes de intentar reproducir.
@@ -1307,7 +1314,10 @@ function registrarAccionesRemotas() {
         })
         .catch(() => {});
     },
-    pause: () => audio.pause(),
+    pause: () => {
+      pausadoPorUsuario = true;
+      audio.pause();
+    },
     previoustrack: anterior,
     nexttrack: () => cambiarPista(1),
     seekto: (detalles) => {
@@ -1517,21 +1527,6 @@ botonDuplicados.addEventListener('click', () => {
     .catch((error) => mostrarAviso(`No se pudieron borrar los duplicados: ${error.message}`));
 });
 
-// Un solo toque inicia la biblioteca y encadena las canciones automáticamente
-reproducirTodo.addEventListener('click', () => {
-  cancionesConError.clear(); // "Reproducir todo" reintenta también las marcadas
-  erroresAudioPorId.clear();
-  const cola = colaReproduccion();
-  if (!cola.length) {
-    mostrarAviso(cancionesVisibles.length
-      ? 'Ninguna canción de la lista se puede reproducir.'
-      : 'Primero importa alguna canción.');
-    return;
-  }
-  configurarSesionDeAudio();
-  reproducir(cola[0], { reanudar: true });
-});
-
 busqueda.addEventListener('input', () => {
   textoBusqueda = busqueda.value;
   limpiarBusqueda.hidden = !textoBusqueda;
@@ -1699,46 +1694,59 @@ audio.addEventListener('error', () => {
   // No es un archivo dañado: marcarlo encadenaba avances infinitos.
   if (audio.error?.code === 1) return;
   cancelarFinCancion();
-  // Si ya llevaba un rato sonando, el fallo es una interrupción (llamada, Siri,
-  // cambio de app, blob que iOS dejó de leer), no un archivo dañado. Marcarlo
-  // sacaría una pista válida de la rotación y encadenaría avisos engañosos.
-  if (audio.currentTime > 2) {
-    mostrarAviso('Se interrumpió la reproducción; se pasa al siguiente.');
-    avanzarAlSiguiente();
+
+  const fallos = erroresAudioPorId.get(idConError) || 0;
+  const cancion = cancionActual();
+
+  // Al apagar la pantalla, con una llamada o con Siri, iOS interrumpe el audio.
+  // Se reanuda la MISMA canción desde el punto guardado antes de pensar en
+  // saltar: es lo que mantiene la música sonando en segundo plano. Tampoco un
+  // primer fallo de carga descarta una pista válida.
+  if (fallos < 2 && cancion) {
+    erroresAudioPorId.set(idConError, fallos + 1);
+    configurarSesionDeAudio();
+    reproducir(cancion, { reanudar: true, conFundido: false });
     return;
   }
-  // iOS emite a veces un primer error transitorio justo tras load()/src. Se
-  // reintenta la misma pista una vez y en silencio antes de descartarla, para
-  // no llenar la biblioteca de canciones válidas marcadas como dañadas.
-  const fallos = erroresAudioPorId.get(idConError) || 0;
-  if (fallos === 0) {
-    erroresAudioPorId.set(idConError, 1);
-    const cancion = cancionActual();
-    if (cancion) {
-      reproducir(cancion, { conFundido: false });
-      return;
-    }
-  }
+
   erroresAudioPorId.set(idConError, fallos + 1);
   cancionesConError.add(idConError);
   historialAleatorio = [];
   olvidarPosicion(idConError);
-  mostrarAviso('No se pudo leer este archivo; se pasa al siguiente.');
+  mostrarAviso(audio.currentTime > 2
+    ? 'Se interrumpió la reproducción; se pasa al siguiente.'
+    : 'No se pudo leer este archivo; se pasa al siguiente.');
   avanzarAlSiguiente();
 });
 
-// iOS puede suspender la app sin avisar: se guarda el punto de escucha al salir
+// iOS suspende la app al bloquear la pantalla y puede pausar el audio. Al volver
+// hay que reanudarla, pero solo si la pausa no fue decidida por la persona.
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') {
     guardarPosicion({ forzar: true });
-  } else if (audio.ended || (audio.paused && Number.isFinite(audio.duration) &&
-             audio.duration > 0 && audio.currentTime >= audio.duration - 0.5)) {
+    configurarSesionDeAudio();
+    return;
+  }
+
+  configurarSesionDeAudio();
+  if (audio.ended || (audio.paused && Number.isFinite(audio.duration) &&
+      audio.duration > 0 && audio.currentTime >= audio.duration - 0.5)) {
     // 'ended' se perdió en segundo plano, o iOS dejó paused sin ended al terminar
     cancelarFinCancion();
     avanzarAlSiguiente();
-  } else if (!audio.paused) {
-    programarFinCancion();
+    return;
   }
+  if (audio.paused && idActual && !pausadoPorUsuario) {
+    // Pausa impuesta por el sistema: continuar sin recargar el archivo.
+    reproducirAudio()
+      .then(() => {
+        actualizarMediaSession();
+        programarFinCancion();
+      })
+      .catch(() => {});
+    return;
+  }
+  if (!audio.paused) programarFinCancion();
 });
 window.addEventListener('pagehide', () => guardarPosicion({ forzar: true }));
 
