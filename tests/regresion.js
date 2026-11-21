@@ -352,6 +352,33 @@ async function simularFundido({ doble = false, cancelar = false } = {}) {
   comprobar('ningún token de tema se autorreferencia',
     !/--([\w-]+):\s*var\(\s*\1\s*\)/.test(css));
 
+  comprobar('la cabecera solo conserva los botones de acción',
+    !/cabecera__titulo|cabecera__icono|cabecera__estado|Mi música|Calculando espacio|estado-almacenamiento|<span>Importar<\/span>/.test(html) &&
+    /id="boton-importar"[^>]*aria-label="Importar canciones"/.test(html) &&
+    /<use href="#i-mas"><\/use>/.test(html));
+  comprobar('el JS ya no muestra el almacenamiento utilizado',
+    !/estadoAlmacenamiento|mostrarEspacio|MB usados|GB disponibles/.test(fuente));
+  comprobar('el botón de importar sigue siendo un objetivo táctil de 44 px',
+    /#boton-importar \{ width: 44px; padding: 0; \}/.test(css));
+  comprobar('la paleta durazno con mostaza sustituye a la anterior',
+    /--acento: #E9A23B;/.test(css) && /--acento-2: #F6C453;/.test(css) &&
+    /--fondo: #241A16;/.test(css) && /--fondo: #FFF6EC;/.test(css) &&
+    !/#4338ca|#22c55e|#6366f1|#0f0f23|#f8fafc|#15803d/i.test(css));
+  comprobar('no quedan tokens con nombres de la paleta anterior',
+    !/--verde-|--resplandor-indigo|--degradado-acento|--acento-sombras/.test(css));
+
+  const manifiesto = JSON.parse(fs.readFileSync(
+    path.join(__dirname, '..', 'manifest.webmanifest'), 'utf8'));
+  comprobar('el manifiesto usa la nueva paleta',
+    manifiesto.theme_color === '#241A16' && manifiesto.background_color === '#FFF6EC');
+  comprobar('la barra de estado sigue al tema del dispositivo',
+    /content="#241A16"/.test(html) &&
+    fuente.includes("oscuro ? '#241A16' : '#FFF6EC'"));
+
+  const sw = fs.readFileSync(path.join(__dirname, '..', 'sw.js'), 'utf8');
+  comprobar('el service worker cachea la versión 24',
+    /const VERSION = 'reproductor-shell-v24';/.test(sw));
+
   const vSinSrc = simularVisibilidad({ src: '' });
   comprobar('volver con el src perdido reconstruye la canción',
     vSinSrc.reconstruidas === 1 && vSinSrc.play === 0 && vSinSrc.avances === 0);

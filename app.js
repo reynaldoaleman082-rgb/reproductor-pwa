@@ -17,7 +17,6 @@ const progreso = $('#progreso');
 const miniProgreso = $('#mini-progreso');
 const tiempoActual = $('#tiempo-actual');
 const tiempoTotal = $('#tiempo-total');
-const estadoAlmacenamiento = $('#estado-almacenamiento');
 const contenido = $('.contenido');
 const portada = $('.portada');
 const herramientas = $('#herramientas');
@@ -35,7 +34,7 @@ const consultaTemaOscuro = window.matchMedia
 function actualizarColorTema() {
   if (!metaTema) return;
   const oscuro = consultaTemaOscuro ? consultaTemaOscuro.matches : true;
-  metaTema.setAttribute('content', oscuro ? '#0f0f23' : '#f8fafc');
+  metaTema.setAttribute('content', oscuro ? '#241A16' : '#FFF6EC');
 }
 
 const DB_NAME = 'reproductor-offline';
@@ -297,7 +296,6 @@ async function cargarCanciones() {
   sincronizarCaratulas();
   renderizarBiblioteca({ animar: true });
   dibujarReproductor();
-  await mostrarEspacio();
   if (idActual && !canciones.some((c) => c.id === idActual)) {
     detener();
   }
@@ -854,19 +852,6 @@ async function copiarDiagnostico() {
     mostrarAviso('Diagnóstico copiado.');
   } catch (_) {
     mostrarAviso('No se pudo copiar; mantén pulsado el texto para seleccionarlo.');
-  }
-}
-
-async function mostrarEspacio() {
-  if (!navigator.storage?.estimate) {
-    estadoAlmacenamiento.textContent = 'Música guardada en este teléfono';
-    return;
-  }
-  try {
-    const { usage, quota } = await navigator.storage.estimate();
-    estadoAlmacenamiento.textContent = `${(usage / 1048576).toFixed(0)} MB usados · ${(quota / 1073741824).toFixed(1)} GB disponibles`;
-  } catch (_) {
-    estadoAlmacenamiento.textContent = 'Música guardada en este teléfono';
   }
 }
 

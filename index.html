@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Reproductor Offline</title>
   <meta name="description" content="Tu música, guardada en tu teléfono y reproducible sin internet.">
-  <meta name="theme-color" id="meta-tema" content="#0f0f23">
+  <meta name="theme-color" id="meta-tema" content="#241A16">
 
   <!-- iOS: hace que se abra a pantalla completa cuando se añade al inicio -->
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -78,15 +78,6 @@
 
   <div class="app">
     <header class="cabecera">
-      <div class="cabecera__titulo">
-        <span class="cabecera__icono" aria-hidden="true">
-          <svg class="icono"><use href="#i-musica"></use></svg>
-        </span>
-        <span class="cabecera__textos">
-          <h1>Mi música</h1>
-          <span id="estado-almacenamiento" class="cabecera__estado">Calculando espacio…</span>
-        </span>
-      </div>
       <div class="cabecera__acciones">
         <button id="boton-diagnostico" class="boton boton--secundario" type="button"
                 aria-label="Ver diagnóstico de reproducción" title="Diagnóstico">
@@ -98,7 +89,6 @@
         </button>
         <button id="boton-importar" class="boton boton--primario" type="button" aria-label="Importar canciones">
           <svg class="icono icono--sm" aria-hidden="true"><use href="#i-mas"></use></svg>
-          <span>Importar</span>
         </button>
       </div>
     </header>
