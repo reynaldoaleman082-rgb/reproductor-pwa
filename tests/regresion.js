@@ -114,7 +114,7 @@ function simularVisibilidad({
   );
   const registro = {
     guardo: 0, sesiones: 0, play: 0, avances: 0, timers: 0,
-    reconstruidas: 0, cancelaciones: 0, avisos: []
+    reconstruidas: 0, cancelaciones: 0, cancelacionesReanudacion: 0, avisos: []
   };
   const manejador = new Function(
     'document', 'audio', 'idActual', 'pausadoPorUsuario',
@@ -122,6 +122,7 @@ function simularVisibilidad({
     'avanzarAlSiguiente', 'reproducirAudio', 'actualizarMediaSession', 'programarFinCancion',
     'registrarDiagnostico', 'cancionActual', 'colaReproduccion', 'reproducir',
     'esPermisoDenegado', 'mostrarAviso', 'fundidoEnCurso', 'cancelarFundido',
+    'cancelarReanudacionAutomatica',
     'const manejador = () => {' + cuerpo + '\n}; manejador();'
   );
   manejador(
@@ -148,7 +149,8 @@ function simularVisibilidad({
     (error) => error?.name === 'NotAllowedError',
     (mensaje) => registro.avisos.push(mensaje),
     fundidoEnCurso,
-    () => { registro.cancelaciones += 1; }
+    () => { registro.cancelaciones += 1; },
+    () => { registro.cancelacionesReanudacion += 1; }
   );
   return registro;
 }
@@ -257,6 +259,70 @@ async function simularFundido({ doble = false, cancelar = false, oculto = false 
   return { id: api.obtenerId(), volumen: audio.volume, temporizadores: temporizadores.size };
 }
 
+function simularReanudacion({ fallos = 0, cambiaPista = false, pausaUsuario = false, yaSonando = false } = {}) {
+  const bloques = [
+    extraerBloque(/function cancelarReanudacionAutomatica\(\) \{[\s\S]*?\n\}/, 'cancelarReanudacionAutomatica'),
+    extraerBloque(/function programarReanudacion\(\) \{[\s\S]*?\n\}/, 'programarReanudacion'),
+    extraerBloque(/function intentarReanudar\(\) \{[\s\S]*?\n\}/, 'intentarReanudar')
+  ].join('\n');
+
+  const temporizadores = new Map();
+  let idTimer = 0;
+  const registro = { plays: 0, diagnosticos: [], retardos: [] };
+  const audio = { paused: true };
+  const cuerpo = `
+    const RETARDOS_REANUDACION = [800, 2000, 5000, 12000, 30000];
+    let temporizadorReanudacion = null;
+    let intentosReanudacion = 0;
+    let idInterrumpido = null;
+    let idActual = 'c1';
+    let pausadoPorUsuario = ${pausaUsuario ? 'true' : 'false'};
+    ${bloques}
+    return {
+      programarReanudacion,
+      cancelarReanudacionAutomatica,
+      cambiarId: (valor) => { idActual = valor; },
+      obtenerTimer: () => temporizadorReanudacion
+    };
+  `;
+  const temporizadorFalso = (accion, retardo) => {
+    idTimer += 1;
+    temporizadores.set(idTimer, accion);
+    registro.retardos.push(retardo);
+    return idTimer;
+  };
+  const api = new Function(
+    'audio', 'setTimeout', 'clearTimeout', 'configurarSesionDeAudio',
+    'reproducirAudio', 'registrarDiagnostico', cuerpo
+  )(
+    audio,
+    temporizadorFalso,
+    (id) => temporizadores.delete(id),
+    () => {},
+    () => {
+      registro.plays += 1;
+      return registro.plays <= fallos
+        ? Promise.reject({ name: 'NotAllowedError' })
+        : Promise.resolve();
+    },
+    (origen, detalle) => registro.diagnosticos.push(`${origen}: ${detalle}`)
+  );
+  api.programarReanudacion();
+  if (cambiaPista) api.cambiarId('c2');
+  return {
+    api,
+    registro,
+    async ejecutarSiguiente() {
+      if (yaSonando) audio.paused = false;
+      const pendientes = [...temporizadores.entries()];
+      temporizadores.clear();
+      pendientes.forEach(([, accion]) => accion());
+      await Promise.resolve();
+      await Promise.resolve();
+    }
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Ejecución
 // ---------------------------------------------------------------------------
@@ -289,12 +355,14 @@ async function simularFundido({ doble = false, cancelar = false, oculto = false 
   const vOculto = simularVisibilidad({ estado: 'hidden' });
   comprobar('pantalla apagada: guarda posición y reafirma sesión',
     vOculto.guardo === 1 && vOculto.sesiones === 1 && vOculto.play === 0 &&
-    vOculto.cancelaciones === 0);
+    vOculto.cancelaciones === 0 && vOculto.cancelacionesReanudacion === 0);
   const vFundido = simularVisibilidad({ estado: 'hidden', fundidoEnCurso: true });
   comprobar('pantalla apagada a mitad de fundido: lo cancela',
     vFundido.cancelaciones === 1 && vFundido.guardo === 1);
   const vSistema = simularVisibilidad();
-  comprobar('volver con pausa del sistema: reanuda', vSistema.play === 1 && vSistema.avances === 0);
+  comprobar('volver con pausa del sistema: reanuda sin duplicar reintentos',
+    vSistema.play === 1 && vSistema.avances === 0 &&
+    vSistema.cancelacionesReanudacion === 1);
   const vUsuario = simularVisibilidad({ pausadoPorUsuario: true });
   comprobar('volver con pausa del usuario: no reanuda', vUsuario.play === 0 && vUsuario.avances === 0);
   const vFin = simularVisibilidad({ currentTime: 199.8 });
@@ -339,6 +407,13 @@ async function simularFundido({ doble = false, cancelar = false, oculto = false 
     /if \(document\.visibilityState === 'hidden'\) \{\s*registrarDiagnostico\('audio', 'segundo plano: cambio sin fundido'\);\s*return reproducirAhora\(cancion, \{ reanudar \}\);/.test(fuente));
   comprobar('ocultar la pantalla a mitad de fundido lo cancela',
     /if \(fundidoEnCurso\) cancelarFundido\(\);/.test(fuente));
+  comprobar('el pause del sistema programa la reanudación automática',
+    /audio\.addEventListener\('pause', \(\) => \{[\s\S]*?programarReanudacion\(\);\n\}\);/.test(fuente));
+  comprobar('playing cancela los reintentos cuando el sonido vuelve',
+    /audio\.addEventListener\('playing', \(\) => \{[\s\S]*?cancelarReanudacionAutomatica\(\);/.test(fuente));
+  comprobar('cambiar de pista y detener cancelan la reanudación pendiente',
+    fuente.includes('function reproducirAhora(cancion, { reanudar = false } = {}) {\n  cancelarReanudacionAutomatica();') &&
+    fuente.includes('function detener() {\n  cancelarReanudacionAutomatica();'));
   comprobar('la canción dañada se marca después de elegir el destino',
     /avanzarAlSiguiente\(\);\s*if \(modoRepeticion !== 'one'\) cancionesConError\.add\(idConError\);/.test(fuente));
   comprobar('el historial aleatorio guarda ids, no índices',
@@ -408,8 +483,8 @@ async function simularFundido({ doble = false, cancelar = false, oculto = false 
     fuente.includes("oscuro ? '#241A16' : '#FFF6EC'"));
 
   const sw = fs.readFileSync(path.join(__dirname, '..', 'sw.js'), 'utf8');
-  comprobar('el service worker cachea la versión 26',
-    /const VERSION = 'reproductor-shell-v26';/.test(sw));
+  comprobar('el service worker cachea la versión 27',
+    /const VERSION = 'reproductor-shell-v27';/.test(sw));
 
   const vSinSrc = simularVisibilidad({ src: '' });
   comprobar('volver con el src perdido reconstruye la canción',
@@ -431,6 +506,35 @@ async function simularFundido({ doble = false, cancelar = false, oculto = false 
   comprobar('en segundo plano cambia sin timers y con volumen intacto',
     fundidoOculto.id === 'B' && fundidoOculto.volumen === 1 &&
     fundidoOculto.temporizadores === 0);
+
+  const reanudacion = simularReanudacion();
+  await reanudacion.ejecutarSiguiente();
+  comprobar('interrupción: vuelve a sonar solo tras la primera espera',
+    reanudacion.registro.plays === 1 && reanudacion.registro.retardos[0] === 800);
+  await reanudacion.ejecutarSiguiente();
+  comprobar('sin sonido aún: reintenta con espera mayor',
+    reanudacion.registro.plays === 2 && reanudacion.registro.retardos[1] === 2000);
+  const reanudacionFallida = simularReanudacion({ fallos: 2 });
+  await reanudacionFallida.ejecutarSiguiente();
+  await reanudacionFallida.ejecutarSiguiente();
+  await reanudacionFallida.ejecutarSiguiente();
+  comprobar('play() rechazado por la interrupción: sigue intentando',
+    reanudacionFallida.registro.plays === 3 &&
+    reanudacionFallida.registro.diagnosticos.some((d) => d.includes('NotAllowedError')));
+  const reanudacionCambiada = simularReanudacion({ cambiaPista: true });
+  await reanudacionCambiada.ejecutarSiguiente();
+  comprobar('si cambió de pista, no resucita la canción anterior',
+    reanudacionCambiada.registro.plays === 0 &&
+    reanudacionCambiada.api.obtenerTimer() === null);
+  const reanudacionUsuario = simularReanudacion({ pausaUsuario: true });
+  comprobar('pausa decidida por el usuario: no se reprograma nada',
+    reanudacionUsuario.registro.retardos.length === 0 &&
+    reanudacionUsuario.registro.plays === 0);
+  const reanudacionSonando = simularReanudacion({ yaSonando: true });
+  await reanudacionSonando.ejecutarSiguiente();
+  comprobar('si ya volvió a sonar, no lanza un play() de más',
+    reanudacionSonando.registro.plays === 0 &&
+    reanudacionSonando.api.obtenerTimer() === null);
 
   terminar();
 })();

@@ -72,6 +72,13 @@ let bibliotecaLista = false; // la carga inicial terminó: ya se puede responder
 // Arranca en true: tras recargar no se reanuda nada sin que la persona dé play.
 // Solo se pone en false cuando la reproducción es intencionada.
 let pausadoPorUsuario = true;
+// iOS no avisa a la PWA de que terminó una interrupción (llamada, Siri, otro
+// audio). Se reintenta con esperas crecientes hasta que 'playing' confirme que
+// el sonido volvió: play() puede resolverse antes de que se oiga nada.
+const RETARDOS_REANUDACION = [800, 2000, 5000, 12000, 30000];
+let temporizadorReanudacion = null;
+let intentosReanudacion = 0;
+let idInterrumpido = null;
 const eventosDiagnostico = [];
 const LIMITE_DIAGNOSTICO = 40;
 let temporizadorAviso;
@@ -912,12 +919,63 @@ function reproducirAudio() {
   });
 }
 
+function cancelarReanudacionAutomatica() {
+  clearTimeout(temporizadorReanudacion);
+  temporizadorReanudacion = null;
+  intentosReanudacion = 0;
+  idInterrumpido = null;
+}
+
+function programarReanudacion() {
+  if (temporizadorReanudacion !== null || !idActual || pausadoPorUsuario) return;
+  idInterrumpido = idActual;
+  intentosReanudacion = 0;
+  registrarDiagnostico('interrupcion', `pausa del sistema en ${idActual}`);
+  intentarReanudar();
+}
+
+function intentarReanudar() {
+  if (temporizadorReanudacion !== null) return;
+  if (idActual !== idInterrumpido || pausadoPorUsuario) {
+    cancelarReanudacionAutomatica();
+    return;
+  }
+  if (intentosReanudacion >= RETARDOS_REANUDACION.length) {
+    registrarDiagnostico('interrupcion', 'se agotaron los reintentos');
+    cancelarReanudacionAutomatica();
+    return;
+  }
+  const retardo = RETARDOS_REANUDACION[intentosReanudacion];
+  intentosReanudacion += 1;
+  temporizadorReanudacion = setTimeout(() => {
+    temporizadorReanudacion = null;
+    // Cambiar de src también dispara 'pause': si ya suena, no hay nada que reanudar.
+    if (idActual !== idInterrumpido || pausadoPorUsuario || !audio.paused) {
+      cancelarReanudacionAutomatica();
+      return;
+    }
+    configurarSesionDeAudio();
+    reproducirAudio()
+      .then(() => {
+        // Solo 'playing' cancela: play() puede resolverse antes de que suene.
+        if (idActual === idInterrumpido && !pausadoPorUsuario) intentarReanudar();
+      })
+      .catch((error) => {
+        if (error.name !== 'AbortError') {
+          registrarDiagnostico('interrupcion', `reintento ${intentosReanudacion}: ${error.name}`);
+        }
+        if (idActual === idInterrumpido && !pausadoPorUsuario) intentarReanudar();
+      });
+  }, retardo);
+}
+
 // Un solo punto de avance: lo usan 'ended', 'error', el respaldo y el regreso
 // a primer plano. Así no se puede avanzar dos veces por la misma canción.
 function avanzarAlSiguiente() {
   // El cambio con fundido tarda hasta varios segundos: los flags deben seguir
   // activos durante la transición o un 'ended' tardío avanza dos veces.
   if (!idActual || avanzando || pausadoPorUsuario) return Promise.resolve();
+  cancelarReanudacionAutomatica();
   avanzando = true;
   olvidarPosicion(idActual);
   posicionPendiente = null;
@@ -1087,6 +1145,7 @@ function reproducir(cancion, { reanudar = false, conFundido = true } = {}) {
 }
 
 function reproducirAhora(cancion, { reanudar = false } = {}) {
+  cancelarReanudacionAutomatica();
   guardarPosicion({ forzar: true }); // recuerda dónde iba la canción anterior
   cancelarFinCancion();
   // Un salto pedido a la canción anterior no debe caer en esta
@@ -1206,6 +1265,7 @@ function alternar() {
         }
       });
   } else {
+    cancelarReanudacionAutomatica();
     pausadoPorUsuario = true;
     audio.pause();
   }
@@ -1295,6 +1355,7 @@ function anterior() {
 }
 
 function detener() {
+  cancelarReanudacionAutomatica();
   cancelarFinCancion();
   cancelarFundido();
   pausadoPorUsuario = true;
@@ -1457,6 +1518,7 @@ function registrarAccionesRemotas() {
         });
     },
     pause: () => {
+      cancelarReanudacionAutomatica();
       pausadoPorUsuario = true;
       audio.pause();
     },
@@ -1830,6 +1892,13 @@ audio.addEventListener('durationchange', () => {
   programarFinCancion();
 });
 
+audio.addEventListener('playing', () => {
+  if (idActual === idInterrumpido) {
+    registrarDiagnostico('interrupcion', 'sonido reanudado');
+    cancelarReanudacionAutomatica();
+  }
+});
+
 audio.addEventListener('play', () => {
   configurarSesionDeAudio();
   actualizarBotonPlay();
@@ -1846,6 +1915,8 @@ audio.addEventListener('pause', () => {
   if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
   guardarPosicion({ forzar: true });
   actualizarPosicion({ forzar: true });
+  // Sin aviso de fin de interrupción en iOS: reintentar hasta que suene.
+  programarReanudacion();
 });
 
 audio.addEventListener('ended', () => {
@@ -1911,6 +1982,7 @@ document.addEventListener('visibilitychange', () => {
     return;
   }
 
+  cancelarReanudacionAutomatica();
   configurarSesionDeAudio();
   if (audio.ended || (audio.paused && Number.isFinite(audio.duration) &&
       audio.duration > 0 && audio.currentTime >= audio.duration - 0.5)) {
