@@ -348,6 +348,10 @@ async function simularFundido({ doble = false, cancelar = false } = {}) {
   comprobar('el JS no referencia los controles de modos del mini',
     !/mini-aleatorio|mini-repeticion|mini-fundido/.test(fuente));
 
+  const css = fs.readFileSync(path.join(__dirname, '..', 'styles.css'), 'utf8');
+  comprobar('ningún token de tema se autorreferencia',
+    !/--([\w-]+):\s*var\(\s*\1\s*\)/.test(css));
+
   const vSinSrc = simularVisibilidad({ src: '' });
   comprobar('volver con el src perdido reconstruye la canción',
     vSinSrc.reconstruidas === 1 && vSinSrc.play === 0 && vSinSrc.avances === 0);
