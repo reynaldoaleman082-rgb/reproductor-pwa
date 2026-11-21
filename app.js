@@ -221,6 +221,8 @@ function actualizarBotonesModos() {
       );
     }
   }
+  const selectorDuracion = $('#duracion-fundido');
+  if (selectorDuracion) selectorDuracion.value = String(duracionFundido);
 }
 
 function alternarRepeticion() {
@@ -1724,9 +1726,16 @@ $('#gran-anterior').addEventListener('click', anterior);
 $('#boton-siguiente').addEventListener('click', () => cambiarPista(1));
 $('#gran-siguiente').addEventListener('click', () => cambiarPista(1));
 
-$('#mini-aleatorio').addEventListener('click', alternarAleatorio);
-$('#mini-repeticion').addEventListener('click', alternarRepeticion);
-$('#mini-fundido').addEventListener('click', alternarFundido);
+$('#gran-aleatorio').addEventListener('click', alternarAleatorio);
+$('#gran-repeticion').addEventListener('click', alternarRepeticion);
+$('#gran-fundido').addEventListener('click', alternarFundido);
+$('#duracion-fundido').addEventListener('change', (evento) => {
+  const valor = Number(evento.target.value);
+  duracionFundido = DURACIONES_FUNDIDO.includes(valor) ? valor : 4;
+  guardarPreferencias();
+  actualizarBotonesModos();
+  mostrarAviso(`Fundido de ${duracionFundido} s`);
+});
 
 $('#abrir-pantalla').addEventListener('click', abrirPantalla);
 $('#cerrar-pantalla').addEventListener('click', cerrarPantalla);
